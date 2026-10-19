@@ -1,5 +1,5 @@
 [project]
-name = "rag-engineering-lab"
+name = "rag-chatbot"
 version = "0.1.0"
 description = "A laboratory for building and evaluating retrieval-augmented generation systems."
 readme = "README.md"

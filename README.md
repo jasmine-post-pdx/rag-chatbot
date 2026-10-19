@@ -1,11 +1,11 @@
-# rag-engineering-lab
+# rag-chatbot
 
 A laboratory for building and evaluating retrieval-augmented generation systems.
 
 ## Layout
 
 ```text
-rag-engineering-lab/
+rag-chatbot/
   app/
     api/          # request entrypoints
     services/     # orchestration

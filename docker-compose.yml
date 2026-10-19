@@ -1,7 +1,7 @@
 services:
   postgres:
     image: pgvector/pgvector:pg16
-    container_name: rag-engineering-lab-postgres
+    container_name: rag-chatbot-postgres
     environment:
       POSTGRES_DB: raglab
       POSTGRES_USER: raglab
