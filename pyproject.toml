@@ -5,12 +5,16 @@ description = "A laboratory for building and evaluating retrieval-augmented gene
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "GPL-3.0-or-later" }
-dependencies = []
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
+    "httpx2>=0.1",
 ]
 
 [build-system]

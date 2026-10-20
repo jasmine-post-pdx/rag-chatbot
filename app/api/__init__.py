@@ -1,1 +1,1 @@
-"""HTTP and application entrypoints for the RAG system."""
+"""HTTP and application entry points for the RAG system."""

@@ -37,6 +37,16 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
+## Run the API
+
+```bash
+uvicorn app.api.main:app --reload
+```
+
+The API includes `GET /health`, `GET /ready`, `POST /v1/questions`, and
+`GET /v1/questions/{request_id}`. Question jobs currently use in-memory storage
+and return a placeholder answer; restarting the process clears their state.
+
 Local Postgres with pgvector:
 
 ```bash
