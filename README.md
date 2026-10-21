@@ -1,60 +1,226 @@
-# rag-chatbot
+# rag-chatbot — RAG Engineering Lab
 
-A laboratory for building and evaluating retrieval-augmented generation systems.
+> Status: This is an active learning scaffold. The HTTP API, request/response
+> schemas, and SQLite-backed question-job storage are implemented, but the
+> retrieval and generation stages still return placeholders. I consider the
+> current milestone complete enough to build on: the structure is testable,
+> documented, and ready for real RAG adapters to be dropped in.
 
-## Layout
+## Why this exists
 
-```text
-rag-chatbot/
-  app/
-    api/          # request entrypoints
-    services/     # orchestration
-    models/       # LLM and embedding adapters
-    retrieval/    # indexing, search, ranking
-    tools/        # optional generation-time tools
-  tests/
-    unit/
-    integration/
-    evals/
-  data/
-    raw/          # unmodified source documents
-    processed/    # derived chunks and embeddings
-  scripts/        # ingest, index, and evaluation jobs
-  docs/
-    architecture.md
-    decisions/    # architecture decision records
-  docker-compose.yml
-  pyproject.toml
+This repository is a hands-on laboratory for building and evaluating
+retrieval-augmented generation systems. The goal is to learn how the pieces of
+a RAG pipeline fit together — ingest, chunk, embed, retrieve, and generate —
+while keeping the project small enough to iterate on quickly. It is also a
+place to practice API design, service-layer testing, and incremental
+engineering decisions before moving to a production-grade system.
+
+## From minimal scaffold to structured project
+
+The project began as a single FastAPI endpoint that accepted a question and
+returned a placeholder answer. I reorganized that into a more conventional
+application structure so each part of the pipeline can evolve independently:
+
+- `app/api/main.py` is the HTTP entry point. It defines the request and
+  response schemas, wires the question service through FastAPI dependency
+  injection, and maps errors to clean HTTP responses.
+- `app/services/questions.py` owns the question-job lifecycle: creating,
+  completing, and looking up jobs. Jobs are persisted to SQLite so the API can
+  survive restarts and support asynchronous polling.
+- `app/retrieval/` will own chunking, indexing, search, ranking, and context
+  assembly once the retrieval adapters are added.
+- `app/models/` will hold LLM and embedding adapters when real generation is
+  wired up.
+- `app/tools/` is reserved for optional callable tools the generator can use.
+- `tests/unit/`, `tests/integration/`, and `tests/evals/` mirror these
+  responsibilities and hold the corresponding automated tests.
+
+This separation is deliberate, not just organizational. Keeping API handlers
+thin, the service layer stateful but storage-agnostic, and the retrieval and
+model packages isolated makes it easier to replace the placeholder behavior
+with real implementations without rewriting the whole application.
+
+## What I'm learning here
+
+- FastAPI request validation, dependency injection, and exception handling
+- Pydantic models as API schemas and internal data-transfer objects
+- Persisting short-lived jobs to SQLite with thread-safe access
+- Writing testable services and covering them with unit and integration tests
+- Structuring a RAG pipeline so retrieval, generation, and orchestration can
+  evolve independently
+- Recording architectural decisions as the project grows
+
+## Stack
+
+- **Python 3.11+** — the project language.
+- **FastAPI** — the web framework for the question API.
+- **Pydantic** — request/response schemas and job models.
+- **Uvicorn** — ASGI server for running the API.
+- **SQLite** — lightweight, local persistence for question jobs.
+- **pytest** — test runner for unit, integration, and evaluation tests.
+- **Ruff** — linter and formatter.
+- **Docker Compose + Postgres/pgvector** — provided for future vector-store
+  work; not connected to the API yet.
+
+## Running it
+
+### Prerequisites
+
+- Python 3.11 or newer
+- (Optional) Docker for running the Postgres/pgvector container
+
+From the repository root:
+
+```bash
+uv sync
 ```
 
-See [docs/architecture.md](docs/architecture.md) for how these pieces fit together.
-
-## Setup
+Or with pip:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
 ```
 
-## Run the API
+### Run the API
+
+With uv:
+
+```bash
+uv run uvicorn app.api.main:app --reload
+```
+
+With a pip-managed virtual environment:
 
 ```bash
 uvicorn app.api.main:app --reload
 ```
 
-The API includes `GET /health`, `GET /ready`, `POST /v1/questions`, and
-`GET /v1/questions/{request_id}`. Question jobs currently use in-memory storage
-and return a placeholder answer; restarting the process clears their state.
+### API
 
-Local Postgres with pgvector:
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/health` | Report that the process is running. |
+| `GET` | `/ready` | Report that the API is ready to accept requests. |
+| `POST` | `/v1/questions` | Submit a question and get a completed result. |
+| `GET` | `/v1/questions/{request_id}` | Poll the status of a submitted question. |
+
+Submit a question:
+
+```bash
+curl -X POST http://localhost:8000/v1/questions \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What is RAG?"}'
+```
+
+Response:
+
+```json
+{
+  "request_id": "<uuid>",
+  "answer": "This is a placeholder answer for: What is RAG?",
+  "citations": [],
+  "retrieval": {"documents_considered": 0, "chunks_returned": 0},
+  "model": {
+    "provider": "local-or-api",
+    "name": "stub",
+    "input_tokens": 0,
+    "output_tokens": 0
+  }
+}
+```
+
+Poll the job:
+
+```bash
+curl http://localhost:8000/v1/questions/<request_id>
+```
+
+### Local Postgres with pgvector
+
+A Postgres container with pgvector is provided for future vector-store work:
 
 ```bash
 docker compose up -d
 ```
 
-## Tests
+It is not yet used by the application; the API currently stores question jobs
+in `data/questions.db`.
+
+## Data And Privacy
+
+Question jobs are stored in a local SQLite file at `data/questions.db`. The app
+does not write question/answer logs or call external LLM APIs by default. The
+Postgres container keeps its data in a named Docker volume and is isolated from
+the SQLite store until the retrieval layer is wired up.
+
+## Limitations And Troubleshooting
+
+- Answers are placeholders. Retrieval and generation are not implemented yet.
+- Only the question-job endpoints are functional; there is no document ingestion
+  or search endpoint.
+- `POST /v1/questions` is synchronous: it creates, completes, and returns the
+  job in one request. Real RAG work will likely be asynchronous.
+- The SQLite database path is hard-coded in `app/api/main.py`. To use a
+  different path, change the `QuestionService` initialization or pass it through
+  configuration.
+- The Postgres container must be started manually and is not required to run
+  the current API.
+- If `data/` does not exist, the service creates it automatically on startup.
+
+## Development
+
+Run the automated tests from the project root:
 
 ```bash
 pytest
 ```
+
+Run the linter:
+
+```bash
+ruff check app tests
+```
+
+The integration tests exercise the HTTP API with an in-memory service override,
+and the unit/evals directories are ready for retrieval, generation, and quality
+tests as those layers are added.
+
+## Notes & findings
+
+- **2026-10-20:** A small, testable scaffold is easier to extend than a
+  monolithic prototype. Separating the API, service, and storage layers made
+  the integration tests simple to write without invoking real retrieval or
+  generation.
+- **2026-10-20:** Pydantic models work well as both request/response schemas
+  and internal DTOs, but it is important to keep internal-only fields out of
+  public response models as the job state grows.
+- **2026-10-20:** SQLite with a thread lock is sufficient for a single-process
+  FastAPI app using thread-pool workers, but it will not scale to multiple
+  processes or workers.
+- **2026-10-20:** Placeholder endpoints reveal what the API contract should be
+  before the heavy RAG machinery exists: question in, answer + citations +
+  retrieval/model metadata out.
+
+## What's next
+
+The following are proposed next steps. They will be implemented to the extent
+that they support this project's learning goals. Some may be deferred to future
+projects.
+
+- [ ] Add real document ingestion (load, chunk, embed) under `app/retrieval/`.
+- [ ] Add a local or API-based embedding model adapter under `app/models/`.
+- [ ] Add a generation adapter that builds prompts from retrieved context.
+- [ ] Replace the placeholder answer in `complete_job` with a real RAG chain.
+- [ ] Store chunks and embeddings in the Postgres/pgvector container.
+- [ ] Add retrieval-quality evaluations under `tests/evals/`.
+- [ ] Move database path and model settings into configuration or environment
+      variables.
+- [ ] Make question processing asynchronous with a real pending/completed
+      lifecycle.
+
+## License
+
+This project is licensed under the MIT license.

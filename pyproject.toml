@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "A laboratory for building and evaluating retrieval-augmented generation systems."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "GPL-3.0-or-later" }
+license = { text = "MIT" }
 dependencies = [
     "fastapi>=0.115",
     "uvicorn>=0.30",
