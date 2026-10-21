@@ -16,6 +16,7 @@ client
 | Path | Responsibility |
 | --- | --- |
 | `app/api/` | HTTP and other entrypoints. Keep handlers thin: parse input, call a service, return a response. |
+| `app/core/` | Cross-cutting concerns such as centralized configuration. Keep this layer free of business logic. |
 | `app/services/` | Orchestration. Compose retrieval, model calls, and tools into a request flow. |
 | `app/models/` | LLM and embedding adapters. Isolate provider-specific code here. |
 | `app/retrieval/` | Chunking, indexing, search, ranking, and context assembly. |

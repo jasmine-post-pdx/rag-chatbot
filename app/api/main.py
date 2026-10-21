@@ -8,6 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from app.core.config import settings
 from app.services.questions import (
     QuestionJob,
     QuestionResult,
@@ -25,7 +26,7 @@ async def lifespan(app: FastAPI) -> None:
     Yields:
         Control is returned to the application while it runs.
     """
-    app.state.question_service = QuestionService(db_path="data/questions.db")
+    app.state.question_service = QuestionService(db_path=settings.questions_db_path)
     try:
         yield
     finally:
