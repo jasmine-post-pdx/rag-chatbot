@@ -1,20 +1,38 @@
 services:
-  postgres:
-    image: pgvector/pgvector:pg16
-    container_name: rag-chatbot-postgres
-    environment:
-      POSTGRES_DB: raglab
-      POSTGRES_USER: raglab
-      POSTGRES_PASSWORD: raglab
+  app:
+    build: .
+    image: rag-chatbot:local
     ports:
-      - "5432:5432"
+      - "8000:8000"
+    environment:
+      QUESTIONS_DB_PATH: /app/data/questions.db
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-raglab}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-raglab}
+      POSTGRES_DB: ${POSTGRES_DB:-raglab}
+    volumes:
+      - questions_data:/app/data
+    restart: unless-stopped
+
+  postgres:
+    profiles:
+      - vector-db
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-raglab}
+      POSTGRES_USER: ${POSTGRES_USER:-raglab}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-raglab}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U raglab -d raglab"]
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
       interval: 5s
       timeout: 5s
       retries: 5
 
 volumes:
+  questions_data:
   postgres_data:

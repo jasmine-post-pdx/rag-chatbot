@@ -64,15 +64,15 @@ with real implementations without rewriting the whole application.
 - **SQLite** — lightweight, local persistence for question jobs.
 - **pytest** — test runner for unit, integration, and evaluation tests.
 - **Ruff** — linter and formatter.
-- **Docker Compose + Postgres/pgvector** — provided for future vector-store
-  work; not connected to the API yet.
+- **Docker + Docker Compose** — can run the API with persistent SQLite storage;
+  Postgres/pgvector remains optional future vector-store work.
 
 ## Running it
 
 ### Prerequisites
 
 - Python 3.11 or newer
-- (Optional) Docker for running the Postgres/pgvector container
+- (Optional) Docker with the Compose plugin for containerized development
 
 From the repository root:
 
@@ -101,6 +101,29 @@ cp .env.example .env
 Key settings include the SQLite job-store path (`QUESTIONS_DB_PATH`) and the
 Postgres/pgvector connection details. All settings have local-development
 defaults, so the API runs without a `.env` file.
+
+### Run with Docker
+
+Build the API image and start the API:
+
+```bash
+docker compose up --build
+```
+
+The API is available at <http://localhost:8000>. Compose stores the SQLite job
+database in a named volume, so it survives container restarts and image
+rebuilds. Stop the service with `Ctrl+C`, or run `docker compose down`; either
+keeps the database volume. To remove the stored jobs as well, run
+`docker compose down --volumes`.
+
+To start the optional pgvector service alongside the API:
+
+```bash
+docker compose --profile vector-db up --build
+```
+
+The API does not connect to Postgres yet, so this profile is only useful for
+future vector-store development.
 
 ### Run the API
 
@@ -161,18 +184,19 @@ curl http://localhost:8000/v1/questions/<request_id>
 A Postgres container with pgvector is provided for future vector-store work:
 
 ```bash
-docker compose up -d
+docker compose --profile vector-db up -d postgres
 ```
 
-It is not yet used by the application; the API currently stores question jobs
-in `data/questions.db`.
+It is not yet used by the application. The API stores question jobs in SQLite,
+at `data/questions.db` when run locally or in the Compose-managed `questions_data`
+volume when run in Docker.
 
 ## Data And Privacy
 
-Question jobs are stored in a local SQLite file at `data/questions.db`. The file
-is created at runtime and is ignored by git. The app does not write
-question/answer logs or call external LLM APIs by default. The
-Postgres container keeps its data in a named Docker volume and is isolated from
+Question jobs are stored in SQLite. Local runs use `data/questions.db`; Docker
+runs use a named volume mounted at `/app/data`. The app does not write
+question/answer logs or call external LLM APIs by default. The optional Postgres
+container keeps its data in a separate named Docker volume and is isolated from
 the SQLite store until the retrieval layer is wired up.
 
 ## Limitations And Troubleshooting
@@ -184,8 +208,8 @@ the SQLite store until the retrieval layer is wired up.
   job in one request. Real RAG work will likely be asynchronous.
 - The SQLite database path defaults to `data/questions.db` and can be changed
   with the `QUESTIONS_DB_PATH` environment variable or in a `.env` file.
-- The Postgres container must be started manually and is not required to run
-  the current API.
+- Postgres is optional and is not required to run the current API. Start it with
+  the `vector-db` Compose profile when needed.
 - If `data/` does not exist, the service creates it automatically on startup.
 
 ## Development
