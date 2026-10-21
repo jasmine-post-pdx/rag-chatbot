@@ -30,7 +30,7 @@ async def request_validation_error_handler(
         issues.append(f"{location}: {message}" if location else message)
     detail = "Invalid request: " + "; ".join(issues)
     return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         content={"detail": detail},
     )
 

@@ -10,7 +10,7 @@ from app.services import questions
 @pytest.fixture
 def client():
     questions._jobs.clear()
-    with TestClient(main.app) as test_client:
+    with TestClient(main.app, raise_server_exceptions=False) as test_client:
         yield test_client
     questions._jobs.clear()
 
@@ -23,21 +23,20 @@ def test_health_and_readiness(client):
 def test_submit_and_poll_question_returns_answer_and_metadata(client):
     response = client.post("/v1/questions", json={"question": "What is RAG?"})
 
-    assert response.status_code == 202
+    assert response.status_code == 200
     submitted = response.json()
-    assert set(submitted) == {"request_id", "status", "result"}
-    assert submitted["status"] == "pending"
-    assert submitted["result"] is None
+    assert set(submitted) == {"request_id", "answer", "citations", "retrieval", "model"}
+    assert submitted["answer"] == "This is a placeholder answer for: What is RAG?"
+    assert submitted["citations"] == []
+    assert submitted["retrieval"] == {"documents_considered": 0, "chunks_returned": 0}
+    assert submitted["model"]["name"] == "stub"
 
     polled = client.get(f"/v1/questions/{submitted['request_id']}")
     assert polled.status_code == 200
     body = polled.json()
     assert body["status"] == "completed"
     assert body["result"]["request_id"] == submitted["request_id"]
-    assert body["result"]["answer"] == "This is a placeholder answer for: What is RAG?"
-    assert body["result"]["citations"] == []
-    assert body["result"]["retrieval"] == {"documents_considered": 0, "chunks_returned": 0}
-    assert body["result"]["model"]["name"] == "stub"
+    assert body["result"]["answer"] == submitted["answer"]
 
 
 @pytest.mark.parametrize(
