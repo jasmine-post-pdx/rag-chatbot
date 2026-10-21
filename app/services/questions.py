@@ -68,6 +68,11 @@ class QuestionResult(BaseModel):
 class QuestionJob(BaseModel):
     """Current state of a submitted question.
 
+    NOTE: This model is also the public response schema for
+    ``GET /v1/questions/{request_id}``. Adding internal-only fields here
+    will change the external API response, so consider introducing a
+    separate response DTO when the job state grows beyond these fields.
+
     Attributes:
         request_id: Unique identifier of the question job.
         status: Whether processing is pending or completed.

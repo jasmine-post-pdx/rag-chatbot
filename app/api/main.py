@@ -1,5 +1,6 @@
 """FastAPI application entry point."""
 
+from contextlib import asynccontextmanager
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
@@ -13,13 +14,24 @@ from app.services.questions import (
     QuestionService,
 )
 
-app = FastAPI(title="RAG Chatbot API", version="0.1.0")
-_question_service = QuestionService()
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> None:
+    """Initialize application state at startup and clean up on shutdown."""
+    app.state.question_service = QuestionService()
+    yield
+    app.state.question_service = None
 
 
-def get_question_service() -> QuestionService:
+app = FastAPI(
+    title="RAG Chatbot API",
+    version="0.1.0",
+    lifespan=lifespan,
+)
+
+
+def get_question_service(request: Request) -> QuestionService:
     """Provide the shared question service instance."""
-    return _question_service
+    return request.app.state.question_service
 
 
 @app.exception_handler(RequestValidationError)
