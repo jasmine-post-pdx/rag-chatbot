@@ -4,15 +4,22 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api import main
-from app.services import questions
+from app.services.questions import QuestionService
 
 
 @pytest.fixture
-def client():
-    questions._jobs.clear()
-    with TestClient(main.app, raise_server_exceptions=False) as test_client:
-        yield test_client
-    questions._jobs.clear()
+def question_service():
+    return QuestionService()
+
+
+@pytest.fixture
+def client(question_service):
+    main.app.dependency_overrides[main.get_question_service] = lambda: question_service
+    try:
+        with TestClient(main.app, raise_server_exceptions=False) as test_client:
+            yield test_client
+    finally:
+        main.app.dependency_overrides.pop(main.get_question_service, None)
 
 
 def test_health_and_readiness(client):
@@ -67,11 +74,13 @@ def test_poll_unknown_question_is_404(client):
     assert response.json() == {"detail": "Question not found"}
 
 
-def test_submit_storage_failure_returns_generic_500(client, monkeypatch):
-    def fail_create_job(request_id):
-        raise RuntimeError("database password and stack details")
+def test_submit_storage_failure_returns_generic_500(client):
+    class FailingQuestionService(QuestionService):
+        def create_job(self, request_id):
+            raise RuntimeError("database password and stack details")
 
-    monkeypatch.setattr(main, "create_job", fail_create_job)
+    failing_service = FailingQuestionService()
+    main.app.dependency_overrides[main.get_question_service] = lambda: failing_service
     response = client.post("/v1/questions", json={"question": "Help"})
 
     assert response.status_code == 500

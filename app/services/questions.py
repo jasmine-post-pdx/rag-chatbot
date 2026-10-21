@@ -79,56 +79,38 @@ class QuestionJob(BaseModel):
     result: QuestionResult | None = None
 
 
-_jobs: dict[str, QuestionJob] = {}
+class QuestionService:
+    """Manage question jobs and their placeholder results."""
 
+    def __init__(self) -> None:
+        self._jobs: dict[str, QuestionJob] = {}
 
-def create_job(request_id: str) -> QuestionJob:
-    """Create and store a pending question job.
+    def create_job(self, request_id: str) -> QuestionJob:
+        """Create and store a pending question job."""
+        job = QuestionJob(request_id=request_id, status="pending")
+        self._jobs[request_id] = job
+        return job
 
-    Args:
-        request_id: Unique identifier assigned to the job.
+    def get_job(self, request_id: str) -> QuestionJob | None:
+        """Look up a question job by identifier."""
+        return self._jobs.get(request_id)
 
-    Returns:
-        The newly created pending job.
-    """
-    job = QuestionJob(request_id=request_id, status="pending")
-    _jobs[request_id] = job
-    return job
-
-
-def get_job(request_id: str) -> QuestionJob | None:
-    """Look up a question job by identifier.
-
-    Args:
-        request_id: Unique identifier of the job to retrieve.
-
-    Returns:
-        The stored job, or ``None`` if it does not exist.
-    """
-    return _jobs.get(request_id)
-
-
-def complete_job(request_id: str, question: str) -> None:
-    """Complete a job with a placeholder result until RAG adapters exist.
-
-    Args:
-        request_id: Unique identifier of the job to complete.
-        question: Original question text used in the placeholder answer.
-    """
-    result = QuestionResult(
-        request_id=request_id,
-        answer=f"This is a placeholder answer for: {question}",
-        citations=[],
-        retrieval=RetrievalMetrics(documents_considered=0, chunks_returned=0),
-        model=ModelMetrics(
-            provider="local-or-api",
-            name="stub",
-            input_tokens=0,
-            output_tokens=0,
-        ),
-    )
-    _jobs[request_id] = QuestionJob(
-        request_id=request_id,
-        status="completed",
-        result=result,
-    )
+    def complete_job(self, request_id: str, question: str) -> None:
+        """Complete a job with a placeholder result until RAG adapters exist."""
+        result = QuestionResult(
+            request_id=request_id,
+            answer=f"This is a placeholder answer for: {question}",
+            citations=[],
+            retrieval=RetrievalMetrics(documents_considered=0, chunks_returned=0),
+            model=ModelMetrics(
+                provider="local-or-api",
+                name="stub",
+                input_tokens=0,
+                output_tokens=0,
+            ),
+        )
+        self._jobs[request_id] = QuestionJob(
+            request_id=request_id,
+            status="completed",
+            result=result,
+        )

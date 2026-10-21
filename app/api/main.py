@@ -2,7 +2,7 @@
 
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field
 from fastapi.responses import JSONResponse
@@ -10,12 +10,16 @@ from fastapi.responses import JSONResponse
 from app.services.questions import (
     QuestionJob,
     QuestionResult,
-    complete_job,
-    create_job,
-    get_job,
+    QuestionService,
 )
 
 app = FastAPI(title="RAG Chatbot API", version="0.1.0")
+_question_service = QuestionService()
+
+
+def get_question_service() -> QuestionService:
+    """Provide the shared question service instance."""
+    return _question_service
 
 
 @app.exception_handler(RequestValidationError)
@@ -54,20 +58,6 @@ class QuestionRequest(BaseModel):
     question: str = Field(min_length=1, max_length=4000)
 
 
-class QuestionResponse(BaseModel):
-    """Status envelope returned when submitting or polling a question.
-
-    Attributes:
-        request_id: Unique identifier for the question job.
-        status: Current job state.
-        result: Completed result, or ``None`` while the job is pending.
-    """
-
-    request_id: str
-    status: str
-    result: QuestionResult | None = None
-
-
 @app.get("/health")
 def health() -> dict[str, str]:
     """Report that the API process is running."""
@@ -86,6 +76,7 @@ def ready() -> dict[str, str]:
 )
 def submit_question(
     request: QuestionRequest,
+    question_service: QuestionService = Depends(get_question_service),
 ) -> QuestionResult:
     """Process a question and return its answer and metadata.
 
@@ -96,15 +87,18 @@ def submit_question(
         The answer and its retrieval and model metadata.
     """
     request_id = str(uuid4())
-    create_job(request_id)
-    complete_job(request_id, request.question)
-    job = get_job(request_id)
+    question_service.create_job(request_id)
+    question_service.complete_job(request_id, request.question)
+    job = question_service.get_job(request_id)
     assert job is not None and job.result is not None
     return job.result
 
 
-@app.get("/v1/questions/{request_id}", response_model=QuestionResponse)
-def question_status(request_id: str) -> QuestionJob:
+@app.get("/v1/questions/{request_id}", response_model=QuestionJob)
+def question_status(
+    request_id: str,
+    question_service: QuestionService = Depends(get_question_service),
+) -> QuestionJob:
     """Return the current state of a question job.
 
     Args:
@@ -116,7 +110,7 @@ def question_status(request_id: str) -> QuestionJob:
     Raises:
         HTTPException: If no job exists for the given identifier.
     """
-    job = get_job(request_id)
+    job = question_service.get_job(request_id)
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question not found")
     return job
