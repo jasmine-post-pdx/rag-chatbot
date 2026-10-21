@@ -17,7 +17,14 @@ from app.services.questions import (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> None:
-    """Initialize application state at startup and clean up on shutdown."""
+    """Manage application startup and shutdown state.
+
+    Args:
+        app: The FastAPI application instance.
+
+    Yields:
+        Control is returned to the application while it runs.
+    """
     app.state.question_service = QuestionService(db_path="data/questions.db")
     try:
         yield
@@ -34,7 +41,14 @@ app = FastAPI(
 
 
 def get_question_service(request: Request) -> QuestionService:
-    """Provide the shared question service instance."""
+    """Return the shared question service instance from application state.
+
+    Args:
+        request: The current HTTP request.
+
+    Returns:
+        The configured question service.
+    """
     return request.app.state.question_service
 
 
@@ -42,7 +56,15 @@ def get_question_service(request: Request) -> QuestionService:
 async def request_validation_error_handler(
     request: Request, exc: RequestValidationError
 ) -> JSONResponse:
-    """Return a concise explanation for invalid request data."""
+    """Return a concise explanation for invalid request data.
+
+    Args:
+        request: The request that triggered the validation error.
+        exc: The validation error raised by FastAPI.
+
+    Returns:
+        A JSON response with a human-readable detail message.
+    """
     issues = []
     for error in exc.errors():
         location = ".".join(str(part) for part in error.get("loc", ()) if part != "body")
@@ -57,7 +79,15 @@ async def request_validation_error_handler(
 
 @app.exception_handler(Exception)
 async def internal_error_handler(request: Request, exc: Exception) -> JSONResponse:
-    """Return a generic server error without exposing implementation details."""
+    """Return a generic server error without exposing implementation details.
+
+    Args:
+        request: The request that triggered the error.
+        exc: The unhandled exception raised during processing.
+
+    Returns:
+        A JSON response with a generic internal server error detail.
+    """
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={"detail": "Internal server error"},
@@ -76,13 +106,21 @@ class QuestionRequest(BaseModel):
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    """Report that the API process is running."""
+    """Report that the API process is running.
+
+    Returns:
+        A status message indicating the API is running.
+    """
     return {"status": "ok"}
 
 
 @app.get("/ready")
 def ready() -> dict[str, str]:
-    """Report that this dependency-free API is ready to accept requests."""
+    """Report that this dependency-free API is ready to accept requests.
+
+    Returns:
+        A status message indicating the API is ready.
+    """
     return {"status": "ready"}
 
 
@@ -98,6 +136,7 @@ def submit_question(
 
     Args:
         request: The question payload from the client.
+        question_service: The service used to create and complete the job.
 
     Returns:
         The answer and its retrieval and model metadata.
@@ -119,6 +158,7 @@ def question_status(
 
     Args:
         request_id: Unique identifier of the requested job.
+        question_service: The service used to look up the job.
 
     Returns:
         The current job state and its result when complete.

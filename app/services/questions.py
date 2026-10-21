@@ -91,6 +91,12 @@ class QuestionService:
     """Manage question jobs and their placeholder results in SQLite."""
 
     def __init__(self, db_path: str = ":memory:") -> None:
+        """Initialize the service and its SQLite backing store.
+
+        Args:
+            db_path: Path to the SQLite database file, or ``:memory:`` for an
+                in-memory database.
+        """
         if db_path != ":memory:":
             os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
         # ``check_same_thread=False`` is safe because ``self._lock`` serializes
@@ -113,7 +119,14 @@ class QuestionService:
             self._conn.commit()
 
     def create_job(self, request_id: str) -> QuestionJob:
-        """Create and store a pending question job."""
+        """Create and store a pending question job.
+
+        Args:
+            request_id: Unique identifier for the new job.
+
+        Returns:
+            The newly created pending job.
+        """
         job = QuestionJob(request_id=request_id, status="pending")
         with self._lock:
             self._conn.execute(
@@ -124,7 +137,14 @@ class QuestionService:
         return job
 
     def get_job(self, request_id: str) -> QuestionJob | None:
-        """Look up a question job by identifier."""
+        """Look up a question job by identifier.
+
+        Args:
+            request_id: Unique identifier of the requested job.
+
+        Returns:
+            The matching job, or ``None`` if no job exists.
+        """
         with self._lock:
             row = self._conn.execute(
                 "SELECT job_json FROM question_jobs WHERE request_id = ?",
@@ -135,7 +155,13 @@ class QuestionService:
         return QuestionJob.model_validate_json(row[0])
 
     def complete_job(self, request_id: str, question: str) -> None:
-        """Complete a job with a placeholder result until RAG adapters exist."""
+        """Complete a job with a placeholder result until RAG adapters exist.
+
+        Args:
+            request_id: Unique identifier of the job to complete.
+            question: The original question text; included in the placeholder
+                answer for identification.
+        """
         result = QuestionResult(
             request_id=request_id,
             answer=f"This is a placeholder answer for: {question}",
@@ -161,6 +187,10 @@ class QuestionService:
             self._conn.commit()
 
     def close(self) -> None:
-        """Close the underlying SQLite connection."""
+        """Close the underlying SQLite connection.
+
+        Returns:
+            None
+        """
         with self._lock:
             self._conn.close()
