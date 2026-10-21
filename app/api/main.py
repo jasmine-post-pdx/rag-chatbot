@@ -5,8 +5,8 @@ from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
-from pydantic import BaseModel, Field
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
 from app.services.questions import (
     QuestionJob,
@@ -14,12 +14,16 @@ from app.services.questions import (
     QuestionService,
 )
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> None:
     """Initialize application state at startup and clean up on shutdown."""
-    app.state.question_service = QuestionService()
-    yield
-    app.state.question_service = None
+    app.state.question_service = QuestionService(db_path="data/questions.db")
+    try:
+        yield
+    finally:
+        app.state.question_service.close()
+        app.state.question_service = None
 
 
 app = FastAPI(
@@ -88,7 +92,7 @@ def ready() -> dict[str, str]:
 )
 def submit_question(
     request: QuestionRequest,
-    question_service: QuestionService = Depends(get_question_service),
+    question_service: QuestionService = Depends(get_question_service),  # noqa: B008
 ) -> QuestionResult:
     """Process a question and return its answer and metadata.
 
@@ -109,7 +113,7 @@ def submit_question(
 @app.get("/v1/questions/{request_id}", response_model=QuestionJob)
 def question_status(
     request_id: str,
-    question_service: QuestionService = Depends(get_question_service),
+    question_service: QuestionService = Depends(get_question_service),  # noqa: B008
 ) -> QuestionJob:
     """Return the current state of a question job.
 

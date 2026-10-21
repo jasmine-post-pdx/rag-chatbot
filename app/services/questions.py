@@ -1,5 +1,8 @@
-"""In-memory question job storage and placeholder processing."""
+"""SQLite-backed question job storage and placeholder processing."""
 
+import os
+import sqlite3
+import threading
 from typing import Literal
 
 from pydantic import BaseModel
@@ -85,20 +88,51 @@ class QuestionJob(BaseModel):
 
 
 class QuestionService:
-    """Manage question jobs and their placeholder results."""
+    """Manage question jobs and their placeholder results in SQLite."""
 
-    def __init__(self) -> None:
-        self._jobs: dict[str, QuestionJob] = {}
+    def __init__(self, db_path: str = ":memory:") -> None:
+        if db_path != ":memory:":
+            os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
+        # ``check_same_thread=False`` is safe because ``self._lock`` serializes
+        # access across FastAPI's thread pool workers.
+        self._conn = sqlite3.connect(db_path, check_same_thread=False)
+        self._lock = threading.Lock()
+        self._ensure_table()
+
+    def _ensure_table(self) -> None:
+        """Create the jobs table if it does not already exist."""
+        with self._lock:
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS question_jobs (
+                    request_id TEXT PRIMARY KEY,
+                    job_json TEXT NOT NULL
+                )
+                """
+            )
+            self._conn.commit()
 
     def create_job(self, request_id: str) -> QuestionJob:
         """Create and store a pending question job."""
         job = QuestionJob(request_id=request_id, status="pending")
-        self._jobs[request_id] = job
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO question_jobs (request_id, job_json) VALUES (?, ?)",
+                (request_id, job.model_dump_json()),
+            )
+            self._conn.commit()
         return job
 
     def get_job(self, request_id: str) -> QuestionJob | None:
         """Look up a question job by identifier."""
-        return self._jobs.get(request_id)
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT job_json FROM question_jobs WHERE request_id = ?",
+                (request_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return QuestionJob.model_validate_json(row[0])
 
     def complete_job(self, request_id: str, question: str) -> None:
         """Complete a job with a placeholder result until RAG adapters exist."""
@@ -114,8 +148,19 @@ class QuestionService:
                 output_tokens=0,
             ),
         )
-        self._jobs[request_id] = QuestionJob(
+        job = QuestionJob(
             request_id=request_id,
             status="completed",
             result=result,
         )
+        with self._lock:
+            self._conn.execute(
+                "REPLACE INTO question_jobs (request_id, job_json) VALUES (?, ?)",
+                (request_id, job.model_dump_json()),
+            )
+            self._conn.commit()
+
+    def close(self) -> None:
+        """Close the underlying SQLite connection."""
+        with self._lock:
+            self._conn.close()
