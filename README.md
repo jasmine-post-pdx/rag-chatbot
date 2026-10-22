@@ -98,9 +98,10 @@ file. Copy `.env.example` to `.env` and edit the values you need:
 cp .env.example .env
 ```
 
-Key settings include the SQLite job-store path (`QUESTIONS_DB_PATH`) and the
-Postgres/pgvector connection details. All settings have local-development
-defaults, so the API runs without a `.env` file.
+Key settings include the SQLite job-store path (`QUESTIONS_DB_PATH`), the
+Postgres/pgvector connection details, and the application log level
+(`LOG_LEVEL`, default `INFO`). All settings have local-development defaults, so
+the API runs without a `.env` file.
 
 ### Run with Docker
 
@@ -178,6 +179,37 @@ Poll the job:
 ```bash
 curl http://localhost:8000/v1/questions/<request_id>
 ```
+
+### Request logging
+
+Every request is logged with a correlation ID, HTTP method, route, response
+status, and elapsed time:
+
+```
+INFO:     Request completed request_id=<uuid> method=POST route=/v1/questions status=200 elapsed_ms=12.345
+```
+
+You can provide your own correlation ID in the `x-request-id` header; otherwise
+the API generates one and returns it in the response:
+
+```bash
+curl -X POST http://localhost:8000/v1/questions \
+  -H "Content-Type: application/json" \
+  -H "x-request-id: my-correlation-id" \
+  -d '{"question": "What is RAG?"}'
+```
+
+Error responses include an `error_category` field:
+
+```
+INFO:     Request completed request_id=<uuid> method=POST route=/v1/questions status=422 elapsed_ms=2.1 error_category=validation
+INFO:     Request completed request_id=<uuid> method=POST route=/v1/questions status=500 elapsed_ms=5.7 error_category=server
+```
+
+Raw questions, answers, credentials, and settings objects are not written to
+request logs by default. The logging layer uses the standard library so the app
+stays dependency-free, but it emits structured key/value fields that map
+cleanly to OpenTelemetry span attributes if tracing is added later.
 
 ### Local Postgres with pgvector
 

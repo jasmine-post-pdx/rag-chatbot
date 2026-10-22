@@ -8,7 +8,9 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from app.api.middleware import RequestLogMiddleware
 from app.core.config import settings
+from app.core.logging import configure_logging
 from app.services.questions import (
     QuestionJob,
     QuestionResult,
@@ -26,6 +28,7 @@ async def lifespan(app: FastAPI) -> None:
     Yields:
         Control is returned to the application while it runs.
     """
+    configure_logging()
     app.state.question_service = QuestionService(db_path=settings.questions_db_path)
     try:
         yield
@@ -39,6 +42,8 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+app.add_middleware(RequestLogMiddleware)
 
 
 def get_question_service(request: Request) -> QuestionService:
@@ -66,6 +71,7 @@ async def request_validation_error_handler(
     Returns:
         A JSON response with a human-readable detail message.
     """
+    request.state.error_category = "validation"
     issues = []
     for error in exc.errors():
         location = ".".join(str(part) for part in error.get("loc", ()) if part != "body")
@@ -89,6 +95,7 @@ async def internal_error_handler(request: Request, exc: Exception) -> JSONRespon
     Returns:
         A JSON response with a generic internal server error detail.
     """
+    request.state.error_category = "server"
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={"detail": "Internal server error"},
