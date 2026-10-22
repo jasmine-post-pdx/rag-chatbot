@@ -40,7 +40,9 @@ def client(question_service):
 
 def test_health_and_readiness(client):
     """Verify the health and readiness endpoints return ok statuses."""
-    assert client.get("/health").json() == {"status": "ok"}
+    health = client.get("/health")
+    assert health.status_code == 200
+    assert health.json() == {"status": "ok"}
 
     ready = client.get("/ready")
     assert ready.status_code == 200
@@ -71,18 +73,40 @@ def test_submit_and_poll_question_returns_answer_and_metadata(client):
 
     assert response.status_code == 200
     submitted = response.json()
-    assert set(submitted) == {"request_id", "answer", "citations", "retrieval", "model"}
-    assert submitted["answer"] == "This is a placeholder answer for: What is RAG?"
-    assert submitted["citations"] == []
-    assert submitted["retrieval"] == {"documents_considered": 0, "chunks_returned": 0}
-    assert submitted["model"]["name"] == "stub"
+    request_id = submitted["request_id"]
+    assert isinstance(request_id, str)
+    assert request_id
+    assert submitted == {
+        "request_id": request_id,
+        "answer": "This is a placeholder answer for: What is RAG?",
+        "citations": [],
+        "retrieval": {"documents_considered": 0, "chunks_returned": 0},
+        "model": {
+            "provider": "local-or-api",
+            "name": "stub",
+            "input_tokens": 0,
+            "output_tokens": 0,
+        },
+    }
 
-    polled = client.get(f"/v1/questions/{submitted['request_id']}")
+    polled = client.get(f"/v1/questions/{request_id}")
     assert polled.status_code == 200
-    body = polled.json()
-    assert body["status"] == "completed"
-    assert body["result"]["request_id"] == submitted["request_id"]
-    assert body["result"]["answer"] == submitted["answer"]
+    assert polled.json() == {
+        "request_id": request_id,
+        "status": "completed",
+        "result": {
+            "request_id": request_id,
+            "answer": "This is a placeholder answer for: What is RAG?",
+            "citations": [],
+            "retrieval": {"documents_considered": 0, "chunks_returned": 0},
+            "model": {
+                "provider": "local-or-api",
+                "name": "stub",
+                "input_tokens": 0,
+                "output_tokens": 0,
+            },
+        },
+    }
 
 
 def test_submit_trims_whitespace_from_question(client):
@@ -129,6 +153,17 @@ def test_submit_rejects_malformed_json(client):
     assert "JSON" in body["detail"]
 
 
+@pytest.mark.parametrize("body", [[], "What is RAG?", 42, None])
+def test_submit_rejects_non_object_json_bodies(client, body):
+    """Verify valid JSON with a non-object root is rejected with a structured 422 response."""
+    response = client.post("/v1/questions", json=body)
+
+    assert response.status_code == 422
+    response_body = response.json()
+    assert set(response_body) == {"detail"}
+    assert response_body["detail"].startswith("Invalid request:")
+
+
 def test_poll_unknown_question_is_404(client):
     """Verify polling an unknown question returns 404."""
     response = client.get("/v1/questions/missing")
@@ -172,18 +207,34 @@ def test_invalid_server_response_data_returns_500(client):
     assert response.json() == {"detail": "Internal server error"}
 
 
-def test_submit_storage_failure_returns_generic_500(client):
-    """Verify unhandled service errors return a generic 500 response."""
+@pytest.mark.parametrize(
+    ("failure_stage", "failure_type", "error_message"),
+    [
+        pytest.param(
+            "retrieval",
+            ConnectionError,
+            "retriever endpoint and credential details",
+            id="retrieval-connection-error",
+        ),
+        pytest.param(
+            "model provider",
+            TimeoutError,
+            "provider endpoint and API key details",
+            id="model-provider-timeout",
+        ),
+    ],
+)
+def test_submit_pipeline_failure_returns_generic_500(
+    client, failure_stage, failure_type, error_message
+):
+    """Verify retrieval and model-provider failures are hidden behind a generic 500."""
+
     class FailingQuestionService(QuestionService):
-        """Stub service that raises an error when creating a job."""
+        """Stub service that fails while processing a question."""
 
-        def create_job(self, request_id):
-            """Raise a runtime error to simulate a storage failure.
-
-            Args:
-                request_id: Unique identifier for the job (unused).
-            """
-            raise RuntimeError("database password and stack details")
+        def complete_job(self, request_id, question):
+            """Raise an error at the simulated pipeline stage."""
+            raise failure_type(f"{failure_stage} failed: {error_message}")
 
     failing_service = FailingQuestionService()
     main.app.dependency_overrides[main.get_question_service] = lambda: failing_service
@@ -191,7 +242,21 @@ def test_submit_storage_failure_returns_generic_500(client):
 
     assert response.status_code == 500
     assert response.json() == {"detail": "Internal server error"}
-    assert "database password" not in response.text
+    assert error_message not in response.text
+    assert "Traceback" not in response.text
+
+
+def test_submit_sqlite_failure_returns_generic_500(client, question_service):
+    """Verify a SQLite operational error becomes a generic 500 without leaking details."""
+    question_service._conn.execute("DROP TABLE question_jobs")
+    question_service._conn.commit()
+
+    response = client.post("/v1/questions", json={"question": "Help"})
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Internal server error"}
+    assert "no such table" not in response.text
+    assert "Traceback" not in response.text
 
 
 def _find_request_records(caplog):
