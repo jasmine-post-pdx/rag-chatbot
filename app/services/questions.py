@@ -186,6 +186,19 @@ class QuestionService:
             )
             self._conn.commit()
 
+    def is_ready(self) -> bool:
+        """Check whether the SQLite connection is usable.
+
+        Returns:
+            True if a simple query executes successfully, False otherwise.
+        """
+        try:
+            with self._lock:
+                self._conn.execute("SELECT 1")
+            return True
+        except sqlite3.Error:
+            return False
+
     def close(self) -> None:
         """Close the underlying SQLite connection.
 

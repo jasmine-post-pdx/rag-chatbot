@@ -41,7 +41,28 @@ def client(question_service):
 def test_health_and_readiness(client):
     """Verify the health and readiness endpoints return ok statuses."""
     assert client.get("/health").json() == {"status": "ok"}
-    assert client.get("/ready").json() == {"status": "ready"}
+
+    ready = client.get("/ready")
+    assert ready.status_code == 200
+    assert ready.json() == {"status": "ready"}
+
+
+def test_ready_returns_503_when_database_unavailable(client):
+    """Verify /ready returns 503 when the SQLite backing store is unusable."""
+
+    class UnreadyQuestionService(QuestionService):
+        """Stub service that reports itself as not ready."""
+
+        def is_ready(self) -> bool:
+            """Return False to simulate a failed dependency."""
+            return False
+
+    unready_service = UnreadyQuestionService()
+    main.app.dependency_overrides[main.get_question_service] = lambda: unready_service
+    response = client.get("/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Service unavailable"}
 
 
 def test_submit_and_poll_question_returns_answer_and_metadata(client):
@@ -64,11 +85,21 @@ def test_submit_and_poll_question_returns_answer_and_metadata(client):
     assert body["result"]["answer"] == submitted["answer"]
 
 
+def test_submit_trims_whitespace_from_question(client):
+    """Verify leading and trailing whitespace is stripped from the question."""
+    response = client.post("/v1/questions", json={"question": "  What is RAG?  "})
+
+    assert response.status_code == 200
+    assert response.json()["answer"] == "This is a placeholder answer for: What is RAG?"
+
+
 @pytest.mark.parametrize(
     ("body", "expected_substring"),
     [
         ({}, "question: Field required"),
         ({"question": ""}, "String should have at least 1 character"),
+        ({"question": " "}, "String should have at least 1 character"),
+        ({"question": "\t\n"}, "String should have at least 1 character"),
         ({"question": "x" * 4001}, "String should have at most 4000 characters"),
         ({"question": 42}, "Input should be a valid string"),
         ({"question": None}, "Input should be a valid string"),

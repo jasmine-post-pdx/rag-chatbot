@@ -1,12 +1,13 @@
 """FastAPI application entry point."""
 
 from contextlib import asynccontextmanager
+from typing import Annotated
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, StringConstraints
 
 from app.api.middleware import RequestLogMiddleware
 from app.core.config import settings
@@ -131,7 +132,10 @@ class QuestionRequest(BaseModel):
         question: The question to process.
     """
 
-    question: str = Field(min_length=1, max_length=4000)
+    question: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=4000),
+    ]
 
 
 @app.get("/health")
@@ -145,12 +149,25 @@ def health() -> dict[str, str]:
 
 
 @app.get("/ready")
-def ready() -> dict[str, str]:
-    """Report that this dependency-free API is ready to accept requests.
+def ready(
+    question_service: QuestionService = Depends(get_question_service),  # noqa: B008
+) -> dict[str, str]:
+    """Report whether the API and its SQLite backing store are ready.
+
+    Args:
+        question_service: The service used to check the backing store.
 
     Returns:
         A status message indicating the API is ready.
+
+    Raises:
+        HTTPException: If the backing store is not usable.
     """
+    if not question_service.is_ready():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Service unavailable",
+        )
     return {"status": "ready"}
 
 
