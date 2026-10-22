@@ -1,6 +1,7 @@
 """In-process tests for the public HTTP API."""
 
 import logging
+from typing import ClassVar
 
 import pytest
 from fastapi.testclient import TestClient
@@ -64,27 +65,37 @@ def test_submit_and_poll_question_returns_answer_and_metadata(client):
 
 
 @pytest.mark.parametrize(
-    "body",
+    ("body", "expected_substring"),
     [
-        {},
-        {"question": ""},
-        {"question": "x" * 4001},
-        {"question": 42},
-        {"question": None},
+        ({}, "question: Field required"),
+        ({"question": ""}, "String should have at least 1 character"),
+        ({"question": "x" * 4001}, "String should have at most 4000 characters"),
+        ({"question": 42}, "Input should be a valid string"),
+        ({"question": None}, "Input should be a valid string"),
     ],
 )
-def test_submit_rejects_invalid_question_payloads(client, body):
-    """Verify invalid question payloads are rejected with 422."""
+def test_submit_rejects_invalid_question_payloads(client, body, expected_substring):
+    """Verify invalid question payloads are rejected with a structured 422 response."""
     response = client.post("/v1/questions", json=body)
+
     assert response.status_code == 422
+    body = response.json()
+    assert set(body) == {"detail"}
+    assert body["detail"].startswith("Invalid request:")
+    assert expected_substring in body["detail"]
 
 
 def test_submit_rejects_malformed_json(client):
-    """Verify malformed JSON bodies are rejected with 422."""
+    """Verify malformed JSON bodies are rejected with a structured 422 response."""
     response = client.post(
         "/v1/questions", content='{"question":', headers={"content-type": "application/json"}
     )
+
     assert response.status_code == 422
+    body = response.json()
+    assert set(body) == {"detail"}
+    assert body["detail"].startswith("Invalid request:")
+    assert "JSON" in body["detail"]
 
 
 def test_poll_unknown_question_is_404(client):
@@ -92,6 +103,42 @@ def test_poll_unknown_question_is_404(client):
     response = client.get("/v1/questions/missing")
     assert response.status_code == 404
     assert response.json() == {"detail": "Question not found"}
+
+
+def test_invalid_server_response_data_returns_500(client):
+    """Verify response-validation failures for server-generated data return 500, not 4xx."""
+
+    class BadResponseQuestionService(QuestionService):
+        """Stub service that returns malformed response data."""
+
+        def get_job(self, request_id):
+            """Return a fake job whose result violates the response model."""
+
+            class FakeJob:
+                result: ClassVar[dict] = {
+                    "request_id": request_id,
+                    "answer": 123,
+                    "citations": "not a list",
+                    "retrieval": {
+                        "documents_considered": "x",
+                        "chunks_returned": "y",
+                    },
+                    "model": {
+                        "provider": "stub",
+                        "name": "stub",
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                    },
+                }
+
+            return FakeJob()
+
+    bad_service = BadResponseQuestionService()
+    main.app.dependency_overrides[main.get_question_service] = lambda: bad_service
+    response = client.post("/v1/questions", json={"question": "Help"})
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Internal server error"}
 
 
 def test_submit_storage_failure_returns_generic_500(client):

@@ -37,10 +37,32 @@ async def lifespan(app: FastAPI) -> None:
         app.state.question_service = None
 
 
+class ValidationErrorResponse(BaseModel):
+    """Public error response for 422 validation failures."""
+
+    detail: str
+
+
+class ServerErrorResponse(BaseModel):
+    """Public error response for 500 internal server errors."""
+
+    detail: str
+
+
 app = FastAPI(
     title="RAG Chatbot API",
     version="0.1.0",
     lifespan=lifespan,
+    responses={
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "model": ValidationErrorResponse,
+            "description": "Validation error",
+        },
+        status.HTTP_500_INTERNAL_SERVER_ERROR: {
+            "model": ServerErrorResponse,
+            "description": "Internal server error",
+        },
+    },
 )
 
 app.add_middleware(RequestLogMiddleware)
@@ -80,7 +102,7 @@ async def request_validation_error_handler(
     detail = "Invalid request: " + "; ".join(issues)
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-        content={"detail": detail},
+        content=ValidationErrorResponse(detail=detail).model_dump(),
     )
 
 
@@ -98,7 +120,7 @@ async def internal_error_handler(request: Request, exc: Exception) -> JSONRespon
     request.state.error_category = "server"
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={"detail": "Internal server error"},
+        content=ServerErrorResponse(detail="Internal server error").model_dump(),
     )
 
 
