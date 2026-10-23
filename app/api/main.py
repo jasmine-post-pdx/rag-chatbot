@@ -1,5 +1,6 @@
 """FastAPI application entry point."""
 
+import logging
 from contextlib import asynccontextmanager
 from typing import Annotated
 from uuid import uuid4
@@ -9,7 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, StringConstraints
 
-from app.api.middleware import RequestLogMiddleware
+from app.api.middleware import REQUEST_ID_HEADER, RequestLogMiddleware
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.services.questions import (
@@ -101,10 +102,15 @@ async def request_validation_error_handler(
         message = error.get("msg", "Invalid value")
         issues.append(f"{location}: {message}" if location else message)
     detail = "Invalid request: " + "; ".join(issues)
-    return JSONResponse(
+    response = JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         content=ValidationErrorResponse(detail=detail).model_dump(),
     )
+    response.headers[REQUEST_ID_HEADER] = request.state.request_id
+    return response
+
+
+logger = logging.getLogger(__name__)
 
 
 @app.exception_handler(Exception)
@@ -119,10 +125,13 @@ async def internal_error_handler(request: Request, exc: Exception) -> JSONRespon
         A JSON response with a generic internal server error detail.
     """
     request.state.error_category = "server"
-    return JSONResponse(
+    logger.exception("Unhandled exception: %s", exc)
+    response = JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content=ServerErrorResponse(detail="Internal server error").model_dump(),
     )
+    response.headers[REQUEST_ID_HEADER] = request.state.request_id
+    return response
 
 
 class QuestionRequest(BaseModel):

@@ -5,6 +5,8 @@ All values have sensible local-development defaults so the application runs
 out of the box, but each value can be overridden per environment.
 """
 
+from urllib.parse import quote
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -54,8 +56,10 @@ class Settings(BaseSettings):
     def postgres_dsn(self) -> str:
         """Return a SQLAlchemy-style Postgres connection URL."""
         return (
-            f"postgresql://{self.postgres_user}:{self.postgres_password}"
-            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+            f"postgresql://{quote(self.postgres_user, safe='')}"
+            f":{quote(self.postgres_password, safe='')}"
+            f"@{self.postgres_host}:{self.postgres_port}"
+            f"/{quote(self.postgres_db, safe='')}"
         )
 
 

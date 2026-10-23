@@ -90,23 +90,31 @@ class QuestionJob(BaseModel):
 class QuestionService:
     """Manage question jobs and their placeholder results in SQLite."""
 
-    def __init__(self, db_path: str = ":memory:") -> None:
+    def __init__(self, db_path: str = ":memory:", timeout: float = 5.0) -> None:
         """Initialize the service and its SQLite backing store.
 
         Args:
             db_path: Path to the SQLite database file, or ``:memory:`` for an
                 in-memory database.
+            timeout: Seconds to wait when the database is locked.
         """
         if db_path != ":memory:":
             os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
         # ``check_same_thread=False`` is safe because ``self._lock`` serializes
         # access across FastAPI's thread pool workers.
-        self._conn = sqlite3.connect(db_path, check_same_thread=False)
+        self._conn = sqlite3.connect(
+            db_path, check_same_thread=False, timeout=timeout
+        )
         self._lock = threading.Lock()
         self._ensure_table()
 
     def _ensure_table(self) -> None:
-        """Create the jobs table if it does not already exist."""
+        """Create the jobs table if it does not already exist.
+
+        WAL mode is enabled for file-backed databases so concurrent readers
+        and writers across multiple Uvicorn workers do not contend for the
+        legacy rollback journal.
+        """
         with self._lock:
             self._conn.execute(
                 """
@@ -116,6 +124,7 @@ class QuestionService:
                 )
                 """
             )
+            self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.commit()
 
     def create_job(self, request_id: str) -> QuestionJob:
@@ -126,14 +135,20 @@ class QuestionService:
 
         Returns:
             The newly created pending job.
+
+        Raises:
+            ValueError: If a job with the same request ID already exists.
         """
         job = QuestionJob(request_id=request_id, status="pending")
         with self._lock:
-            self._conn.execute(
-                "INSERT INTO question_jobs (request_id, job_json) VALUES (?, ?)",
-                (request_id, job.model_dump_json()),
-            )
-            self._conn.commit()
+            try:
+                self._conn.execute(
+                    "INSERT INTO question_jobs (request_id, job_json) VALUES (?, ?)",
+                    (request_id, job.model_dump_json()),
+                )
+                self._conn.commit()
+            except sqlite3.IntegrityError as exc:
+                raise ValueError(f"Job already exists: {request_id}") from exc
         return job
 
     def get_job(self, request_id: str) -> QuestionJob | None:
@@ -161,6 +176,9 @@ class QuestionService:
             request_id: Unique identifier of the job to complete.
             question: The original question text; included in the placeholder
                 answer for identification.
+
+        Raises:
+            ValueError: If no pending job exists for the request ID.
         """
         result = QuestionResult(
             request_id=request_id,
@@ -180,9 +198,15 @@ class QuestionService:
             result=result,
         )
         with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM question_jobs WHERE request_id = ?",
+                (request_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"Job not found: {request_id}")
             self._conn.execute(
-                "REPLACE INTO question_jobs (request_id, job_json) VALUES (?, ?)",
-                (request_id, job.model_dump_json()),
+                "UPDATE question_jobs SET job_json = ? WHERE request_id = ?",
+                (job.model_dump_json(), request_id),
             )
             self._conn.commit()
 

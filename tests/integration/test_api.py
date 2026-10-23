@@ -371,6 +371,29 @@ def test_request_id_header_is_preserved(client, caplog):
     assert records[0].request_id == "existing-request-id"
 
 
+def test_request_id_header_is_returned_on_server_error(client):
+    """Verify a 500 response still carries the correlation ID header."""
+
+    class FailingQuestionService(QuestionService):
+        """Stub service that raises an error when creating a job."""
+
+        def create_job(self, request_id):
+            """Raise a runtime error to simulate a storage failure."""
+            raise RuntimeError("simulated failure")
+
+    main.app.dependency_overrides[main.get_question_service] = (
+        lambda: FailingQuestionService()
+    )
+    response = client.post(
+        "/v1/questions",
+        json={"question": "What is RAG?"},
+        headers={"x-request-id": "error-request-id"},
+    )
+
+    assert response.status_code == 500
+    assert response.headers["x-request-id"] == "error-request-id"
+
+
 def test_request_log_does_not_contain_question_text(client, caplog):
     """Verify raw request bodies are not written to logs."""
     caplog.set_level(logging.INFO)
