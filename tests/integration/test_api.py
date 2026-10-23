@@ -271,6 +271,26 @@ def test_invalid_server_response_data_returns_500(client):
     assert response.json() == {"detail": "Internal server error"}
 
 
+def test_submit_returns_500_when_result_is_missing(client):
+    """Verify a job without a result becomes a generic 500 instead of an assert."""
+
+    class MissingResultQuestionService(QuestionService):
+        """Stub service that returns a pending job without a result."""
+
+        def get_job(self, request_id):
+            """Return a pending job to simulate an incomplete pipeline."""
+            from app.services.questions import QuestionJob
+
+            return QuestionJob(request_id=request_id, status="pending")
+
+    missing_service = MissingResultQuestionService()
+    main.app.dependency_overrides[main.get_question_service] = lambda: missing_service
+    response = client.post("/v1/questions", json={"question": "Help"})
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Internal server error"}
+
+
 @pytest.mark.parametrize(
     ("failure_stage", "failure_type", "error_message"),
     [

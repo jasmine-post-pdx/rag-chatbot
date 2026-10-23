@@ -201,7 +201,11 @@ def submit_question(
     question_service.create_job(request_id)
     question_service.complete_job(request_id, request.question)
     job = question_service.get_job(request_id)
-    assert job is not None and job.result is not None
+    if job is None or job.result is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        )
     return job.result
 
 
