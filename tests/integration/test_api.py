@@ -38,12 +38,21 @@ def client(question_service):
         main.app.dependency_overrides.pop(main.get_question_service, None)
 
 
-def test_health_and_readiness(client):
-    """Verify the health and readiness endpoints return ok statuses."""
+# /health
+
+
+def test_health_returns_ok(client):
+    """Verify the health endpoint returns an ok status."""
     health = client.get("/health")
     assert health.status_code == 200
     assert health.json() == {"status": "ok"}
 
+
+# /ready
+
+
+def test_readiness_returns_ready(client):
+    """Verify the readiness endpoint returns a ready status."""
     ready = client.get("/ready")
     assert ready.status_code == 200
     assert ready.json() == {"status": "ready"}
@@ -65,6 +74,9 @@ def test_ready_returns_503_when_database_unavailable(client):
 
     assert response.status_code == 503
     assert response.json() == {"detail": "Service unavailable"}
+
+
+# /v1/questions
 
 
 def test_submit_and_poll_question_returns_answer_and_metadata(client):
@@ -117,27 +129,72 @@ def test_submit_trims_whitespace_from_question(client):
     assert response.json()["answer"] == "This is a placeholder answer for: What is RAG?"
 
 
-@pytest.mark.parametrize(
-    ("body", "expected_substring"),
-    [
-        ({}, "question: Field required"),
-        ({"question": ""}, "String should have at least 1 character"),
-        ({"question": " "}, "String should have at least 1 character"),
-        ({"question": "\t\n"}, "String should have at least 1 character"),
-        ({"question": "x" * 4001}, "String should have at most 4000 characters"),
-        ({"question": 42}, "Input should be a valid string"),
-        ({"question": None}, "Input should be a valid string"),
-    ],
-)
-def test_submit_rejects_invalid_question_payloads(client, body, expected_substring):
-    """Verify invalid question payloads are rejected with a structured 422 response."""
-    response = client.post("/v1/questions", json=body)
+def test_submit_rejects_missing_question_field(client):
+    """Verify a missing question field returns a field-required error."""
+    response = client.post("/v1/questions", json={})
 
     assert response.status_code == 422
-    body = response.json()
-    assert set(body) == {"detail"}
-    assert body["detail"].startswith("Invalid request:")
-    assert expected_substring in body["detail"]
+    assert response.json() == {"detail": "Invalid request: question: Field required"}
+
+
+def test_submit_rejects_empty_question(client):
+    """Verify an empty question string returns a minimum-length error."""
+    response = client.post("/v1/questions", json={"question": ""})
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": "Invalid request: question: String should have at least 1 character"
+    }
+
+
+def test_submit_rejects_whitespace_question(client):
+    """Verify a whitespace-only question returns a minimum-length error."""
+    response = client.post("/v1/questions", json={"question": " "})
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": "Invalid request: question: String should have at least 1 character"
+    }
+
+
+def test_submit_rejects_question_with_only_tabs_and_newlines(client):
+    """Verify a question of only tabs/newlines returns a minimum-length error."""
+    response = client.post("/v1/questions", json={"question": "\t\n"})
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": "Invalid request: question: String should have at least 1 character"
+    }
+
+
+def test_submit_rejects_question_that_is_too_long(client):
+    """Verify a question over the max length returns a maximum-length error."""
+    response = client.post("/v1/questions", json={"question": "x" * 4001})
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": "Invalid request: question: String should have at most 4000 characters"
+    }
+
+
+def test_submit_rejects_non_string_question(client):
+    """Verify a non-string question returns a type error."""
+    response = client.post("/v1/questions", json={"question": 42})
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": "Invalid request: question: Input should be a valid string"
+    }
+
+
+def test_submit_rejects_null_question(client):
+    """Verify a null question returns a type error."""
+    response = client.post("/v1/questions", json={"question": None})
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": "Invalid request: question: Input should be a valid string"
+    }
 
 
 def test_submit_rejects_malformed_json(client):
@@ -149,19 +206,26 @@ def test_submit_rejects_malformed_json(client):
     assert response.status_code == 422
     body = response.json()
     assert set(body) == {"detail"}
-    assert body["detail"].startswith("Invalid request:")
-    assert "JSON" in body["detail"]
+    assert body["detail"] == "Invalid request: 12: JSON decode error"
 
 
-@pytest.mark.parametrize("body", [[], "What is RAG?", 42, None])
-def test_submit_rejects_non_object_json_bodies(client, body):
+@pytest.mark.parametrize(
+    ("body", "expected_detail"),
+    [
+        ([], "Invalid request: Input should be a valid dictionary or object to extract fields from"),
+        ("What is RAG?", "Invalid request: Input should be a valid dictionary or object to extract fields from"),
+        (42, "Invalid request: Input should be a valid dictionary or object to extract fields from"),
+        (None, "Invalid request: Field required"),
+    ],
+)
+def test_submit_rejects_non_object_json_bodies(client, body, expected_detail):
     """Verify valid JSON with a non-object root is rejected with a structured 422 response."""
     response = client.post("/v1/questions", json=body)
 
     assert response.status_code == 422
     response_body = response.json()
     assert set(response_body) == {"detail"}
-    assert response_body["detail"].startswith("Invalid request:")
+    assert response_body["detail"] == expected_detail
 
 
 def test_poll_unknown_question_is_404(client):
@@ -257,6 +321,9 @@ def test_submit_sqlite_failure_returns_generic_500(client, question_service):
     assert response.json() == {"detail": "Internal server error"}
     assert "no such table" not in response.text
     assert "Traceback" not in response.text
+
+
+# Request logging middleware (exercised via /v1/questions)
 
 
 def _find_request_records(caplog):
