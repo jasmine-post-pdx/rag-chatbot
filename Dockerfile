@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.11-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -13,6 +13,20 @@ RUN pip install --no-cache-dir uv==0.12.23 \
 
 COPY --chown=app:app pyproject.toml uv.lock README.md ./
 COPY --chown=app:app app ./app
+
+# Development/CI stage with test dependencies and test suite.
+FROM base AS dev
+
+RUN uv sync --frozen --extra dev --no-cache
+
+COPY --chown=app:app tests ./tests
+
+USER app
+
+CMD ["pytest"]
+
+# Production/runtime stage (default target).
+FROM base AS runtime
 
 RUN uv sync --frozen --no-dev --no-cache
 

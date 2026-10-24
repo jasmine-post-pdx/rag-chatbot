@@ -23,9 +23,10 @@ The project began as a single FastAPI endpoint that accepted a question and
 returned a placeholder answer. I reorganized that into a more conventional
 application structure so each part of the pipeline can evolve independently:
 
-- `app/api/main.py` is the HTTP entry point. It defines the request and
-  response schemas, wires the question service through FastAPI dependency
-  injection, and maps errors to clean HTTP responses.
+- `app/api/main.py` is the HTTP entry point. It wires the question service
+  through FastAPI dependency injection and maps errors to clean HTTP responses.
+- `app/api/schemas.py` holds the public request and response schemas so the HTTP
+  contract can evolve independently from internal service-layer DTOs.
 - `app/core/config.py` centralizes settings loaded from environment variables
   and an optional `.env` file. It keeps environment-specific values out of the
   source code.
@@ -105,7 +106,8 @@ the API runs without a `.env` file.
 
 ### Run with Docker
 
-Build the API image and start the API:
+Build the API image (default `runtime` target) and start the API. The port
+mapping is defined in `docker-compose.yml`, so no extra `-p` flag is needed:
 
 ```bash
 docker compose up --build
@@ -125,6 +127,19 @@ docker compose --profile vector-db up --build
 
 The API does not connect to Postgres yet, so this profile is only useful for
 future vector-store development.
+
+### Run tests in Docker
+
+The Dockerfile defaults to the production `runtime` target. To build the `dev`
+target with test dependencies and run the test suite:
+
+```bash
+docker build --target dev -t rag-chatbot:dev .
+docker run --rm rag-chatbot:dev
+```
+
+This uses the same locked dependencies as the production image, so CI results
+match what the runtime image uses.
 
 ### Run the API
 
@@ -252,6 +267,13 @@ Run the automated tests from the project root:
 pytest
 ```
 
+Run the tests inside the Docker `dev` target:
+
+```bash
+docker build --target dev -t rag-chatbot:dev .
+docker run --rm rag-chatbot:dev
+```
+
 Run the linter:
 
 ```bash
@@ -270,7 +292,9 @@ tests as those layers are added.
   generation.
 - **2026-10-20:** Pydantic models work well as both request/response schemas
   and internal DTOs, but it is important to keep internal-only fields out of
-  public response models as the job state grows.
+  public response models as the job state grows. A dedicated `QuestionJobResponse`
+  schema in `app/api/schemas.py` now maps the internal `QuestionJob` DTO to the
+  public polling contract.
 - **2026-10-20:** SQLite with a thread lock is sufficient for a single-process
   FastAPI app using thread-pool workers, but it will not scale to multiple
   processes or workers.

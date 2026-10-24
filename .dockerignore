@@ -8,8 +8,6 @@ __pycache__/
 .env
 .env.*
 data/
-tests/
 docs/
-scripts/
 *.db
 *.db-*

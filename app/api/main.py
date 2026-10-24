@@ -11,13 +11,15 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, StringConstraints
 
 from app.api.middleware import REQUEST_ID_HEADER, RequestLogMiddleware
+from app.api.schemas import QuestionJobResponse
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.services.questions import (
-    QuestionJob,
     QuestionResult,
     QuestionService,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -102,15 +104,13 @@ async def request_validation_error_handler(
         message = error.get("msg", "Invalid value")
         issues.append(f"{location}: {message}" if location else message)
     detail = "Invalid request: " + "; ".join(issues)
+    logger.warning("Validation error: %s", detail)
     response = JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         content=ValidationErrorResponse(detail=detail).model_dump(),
     )
     response.headers[REQUEST_ID_HEADER] = request.state.request_id
     return response
-
-
-logger = logging.getLogger(__name__)
 
 
 @app.exception_handler(Exception)
@@ -209,11 +209,11 @@ def submit_question(
     return job.result
 
 
-@app.get("/v1/questions/{request_id}", response_model=QuestionJob)
+@app.get("/v1/questions/{request_id}", response_model=QuestionJobResponse)
 def question_status(
     request_id: str,
     question_service: QuestionService = Depends(get_question_service),  # noqa: B008
-) -> QuestionJob:
+) -> QuestionJobResponse:
     """Return the current state of a question job.
 
     Args:
@@ -229,4 +229,8 @@ def question_status(
     job = question_service.get_job(request_id)
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question not found")
-    return job
+    return QuestionJobResponse(
+        request_id=job.request_id,
+        status=job.status,
+        result=job.result,
+    )
