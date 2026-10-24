@@ -1,44 +1,67 @@
 # Architecture
 
-This lab is organized around a retrieval-augmented generation (RAG) pipeline: ingest documents, retrieve relevant context, then generate an answer.
+This page separates the system that runs today from the RAG architecture the
+project is building toward. The current API and SQLite job store are working;
+document ingestion, retrieval, and model integrations are still future work.
+
+## Current implementation
 
 ```text
 client
-  -> app/api
-    -> app/services
-      -> app/retrieval
-      -> app/models
-      -> app/tools
+  -> FastAPI routes and request middleware (`app/api/`)
+    -> shared `QuestionService` (`app/services/questions.py`)
+      -> SQLite question-job database
 ```
 
-## Application
-
-| Path | Responsibility |
+| Area | Current responsibility |
 | --- | --- |
-| `app/api/` | HTTP and other entrypoints. Keep handlers thin: parse input, call a service, return a response. |
-| `app/core/` | Cross-cutting concerns such as centralized configuration. Keep this layer free of business logic. |
-| `app/services/` | Orchestration. Compose retrieval, model calls, and tools into a request flow. |
-| `app/models/` | LLM and embedding adapters. Isolate provider-specific code here. |
-| `app/retrieval/` | Chunking, indexing, search, ranking, and context assembly. |
-| `app/tools/` | Optional callable tools used during generation. |
+| `app/api/` | Health and readiness checks, synchronous question submission, job status responses, validation, and request correlation. |
+| `app/core/` | Environment-based settings and standard-library logging configuration. |
+| `app/services/questions.py` | Question-job lifecycle, SQLite persistence, and the placeholder answer. Storage and orchestration currently live together. |
+| `app/api/schemas.py` | Public response model for job status. Other API and result models remain in `main.py` and `services/questions.py`. |
+| `app/models/`, `app/retrieval/`, `app/tools/` | Package placeholders; no model, retrieval, or tool behavior is implemented yet. |
 
-## Data
+The service is initialized during the FastAPI application lifespan and shared
+with routes through dependency injection. Question submission currently
+creates, completes, and returns a job in one request. SQLite stores the job;
+the optional Compose pgvector service is not connected to the application.
 
-| Path | Responsibility |
+The `data/raw/`, `data/processed/`, and `scripts/` directories are reserved for
+future ingestion work and currently contain no pipeline implementation.
+
+## Tests today
+
+| Path | Current contents |
 | --- | --- |
-| `data/raw/` | Source documents as ingested, unmodified. |
-| `data/processed/` | Chunks, embeddings, and other derived artifacts. |
+| `tests/unit/` | Configuration and SQLite question-service tests. |
+| `tests/integration/` | API behavior, request handling, and service failure cases. |
+| `tests/evals/` | Placeholder package; no retrieval or answer-quality evaluations exist yet. |
 
-Processing scripts live in `scripts/` and should write from `data/raw/` into `data/processed/` rather than mutating sources in place.
+## Future RAG plan
 
-## Tests
+The intended request flow will add document ingestion and retrieval before
+generation:
 
-| Path | Responsibility |
-| --- | --- |
-| `tests/unit/` | Fast, isolated checks of retrieval, ranking, and service logic. |
-| `tests/integration/` | Checks that exercise storage, APIs, or composed services. |
-| `tests/evals/` | Quality evaluations: retrieval hit rate, groundedness, answer faithfulness. |
+```text
+documents -> ingestion/chunking -> vector store
+client -> API -> service/orchestrator -> retrieval -> model generation -> answer
+                                      \-> optional tools
+```
+
+- Add ingestion, chunking, embeddings, search, ranking, and context assembly
+  under `app/retrieval/` and model adapters under `app/models/`.
+- Connect the optional Postgres/pgvector service for document chunks and
+  embeddings; keep SQLite focused on question-job state unless that boundary
+  changes deliberately.
+- Replace the placeholder answer with retrieval-grounded generation. Decide
+  whether processing needs a background worker after real pipeline latency is
+  understood.
+- Add retrieval and answer-quality evaluations under `tests/evals/`.
+- Consider separating job orchestration from SQLite persistence when another
+  job store or a different deployment model is needed.
 
 ## Decisions
 
-Record architectural choices in `docs/decisions/` so later experiments can compare against a known baseline rather than reconstructing why a chunker, index, or model was selected.
+Record architectural choices in `docs/decisions/` so later experiments can
+compare against a known baseline rather than reconstructing why a chunker,
+index, or model was selected.

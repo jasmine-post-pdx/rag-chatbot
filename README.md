@@ -25,14 +25,16 @@ application structure so each part of the pipeline can evolve independently:
 
 - `app/api/main.py` is the HTTP entry point. It wires the question service
   through FastAPI dependency injection and maps errors to clean HTTP responses.
-- `app/api/schemas.py` holds the public request and response schemas so the HTTP
-  contract can evolve independently from internal service-layer DTOs.
+- `app/api/schemas.py` currently holds the public polling response schema.
+  Other request and response models still live in the API and service modules;
+  moving all public schemas here is a future refinement.
 - `app/core/config.py` centralizes settings loaded from environment variables
   and an optional `.env` file. It keeps environment-specific values out of the
   source code.
-- `app/services/questions.py` owns the question-job lifecycle: creating,
-  completing, and looking up jobs. Jobs are persisted to SQLite so the API can
-  survive restarts and support asynchronous polling.
+- `app/services/questions.py` currently implements both the question-job
+  lifecycle and SQLite persistence. Completed jobs survive restarts and can be
+  retrieved through the status endpoint. A future storage abstraction could
+  separate orchestration from SQLite and support other job stores.
 - `app/retrieval/` will own chunking, indexing, search, ranking, and context
   assembly once the retrieval adapters are added.
 - `app/models/` will hold LLM and embedding adapters when real generation is
@@ -41,10 +43,12 @@ application structure so each part of the pipeline can evolve independently:
 - `tests/unit/`, `tests/integration/`, and `tests/evals/` mirror these
   responsibilities and hold the corresponding automated tests.
 
-This separation is deliberate, not just organizational. Keeping API handlers
-thin, the service layer stateful but storage-agnostic, and the retrieval and
-model packages isolated makes it easier to replace the placeholder behavior
-with real implementations without rewriting the whole application.
+This structure establishes boundaries that will be strengthened as the RAG
+pipeline develops. API handlers are kept thin, while the current question
+service handles both job orchestration and SQLite persistence. Retrieval,
+model, and tool packages are placeholders for future adapters. Public API
+schemas are partially separated from internal models, with further separation
+planned as the contract grows.
 
 ## What I'm learning here
 
@@ -73,6 +77,7 @@ with real implementations without rewriting the whole application.
 ### Prerequisites
 
 - Python 3.11 or newer
+- `uv` when using the recommended `uv sync` workflow
 - (Optional) Docker with the Compose plugin for containerized development
 
 From the repository root:
@@ -103,6 +108,13 @@ Key settings include the SQLite job-store path (`QUESTIONS_DB_PATH`), the
 Postgres/pgvector connection details, and the application log level
 (`LOG_LEVEL`, default `INFO`). All settings have local-development defaults, so
 the API runs without a `.env` file.
+
+Local runs load all of these settings from environment variables or `.env`.
+Docker Compose currently forwards the Postgres settings, sets
+`QUESTIONS_DB_PATH` to `/app/data/questions.db`, and otherwise uses application
+defaults. Settings such as `LOG_LEVEL` and model configuration will need to be
+added to the Compose environment before `.env` overrides affect them inside the
+container.
 
 ### Run with Docker
 
@@ -138,8 +150,9 @@ docker build --target dev -t rag-chatbot:dev .
 docker run --rm rag-chatbot:dev
 ```
 
-This uses the same locked dependencies as the production image, so CI results
-match what the runtime image uses.
+The `runtime` and `dev` targets use the same lockfile and runtime dependency
+versions. The `dev` target additionally installs test and lint dependencies. A
+CI workflow has not yet been added.
 
 ### Run the API
 
@@ -162,7 +175,7 @@ uvicorn app.api.main:app --reload
 | `GET` | `/health` | Report that the process is running. |
 | `GET` | `/ready` | Report that the API is ready to accept requests. |
 | `POST` | `/v1/questions` | Submit a question and get a completed result. |
-| `GET` | `/v1/questions/{request_id}` | Poll the status of a submitted question. |
+| `GET` | `/v1/questions/{request_id}` | Retrieve the status and result of a submitted question. |
 
 Submit a question:
 
@@ -189,7 +202,7 @@ Response:
 }
 ```
 
-Poll the job:
+Retrieve the stored job:
 
 ```bash
 curl http://localhost:8000/v1/questions/<request_id>
@@ -214,17 +227,21 @@ curl -X POST http://localhost:8000/v1/questions \
   -d '{"question": "What is RAG?"}'
 ```
 
-Error responses include an `error_category` field:
+Failure request logs include an `error_category` field. This is log metadata;
+HTTP error responses return a concise `detail` field instead:
 
 ```
 INFO:     Request completed request_id=<uuid> method=POST route=/v1/questions status=422 elapsed_ms=2.1 error_category=validation
 INFO:     Request completed request_id=<uuid> method=POST route=/v1/questions status=500 elapsed_ms=5.7 error_category=server
 ```
 
-Raw questions, answers, credentials, and settings objects are not written to
-request logs by default. The logging layer uses the standard library so the app
-stays dependency-free, but it emits structured key/value fields that map
-cleanly to OpenTelemetry span attributes if tracing is added later.
+Request logging does not intentionally include request bodies, answers,
+credentials, or settings objects. Correlation and request metadata are emitted
+as structured key/value fields using the standard library. Exception handlers
+can include exception messages in log messages, but the configured stdout
+formatter does not render traceback text from exception records. Sanitize
+provider exception messages before logging them when external services are
+integrated.
 
 ### Local Postgres with pgvector
 
@@ -287,20 +304,48 @@ tests as those layers are added.
 ## Notes & findings
 
 - **2026-10-20:** A small, testable scaffold is easier to extend than a
-  monolithic prototype. Separating the API, service, and storage layers made
-  the integration tests simple to write without invoking real retrieval or
-  generation.
-- **2026-10-20:** Pydantic models work well as both request/response schemas
+  monolithic prototype. Separating API handlers from service logic made the
+  integration tests simple to write without invoking real retrieval or generation.
+- **2026-10-23:** Pydantic models work well as both request/response schemas
   and internal DTOs, but it is important to keep internal-only fields out of
   public response models as the job state grows. A dedicated `QuestionJobResponse`
   schema in `app/api/schemas.py` now maps the internal `QuestionJob` DTO to the
-  public polling contract.
+  public status contract.
 - **2026-10-20:** SQLite with a thread lock is sufficient for a single-process
   FastAPI app using thread-pool workers, but it will not scale to multiple
   processes or workers.
 - **2026-10-20:** Placeholder endpoints reveal what the API contract should be
   before the heavy RAG machinery exists: question in, answer + citations +
   retrieval/model metadata out.
+- **2026-10-20:** FastAPI dependency overrides make service-level failure cases
+  easy to test without patching module globals. Managing the shared service
+  through the application lifespan also gives database connections an explicit
+  startup and shutdown boundary.
+- **2026-10-21:** Liveness and readiness answer different questions. `/health`
+  reports that the process is running, while `/ready` verifies that SQLite is
+  usable and returns `503` when the dependency is unavailable.
+- **2026-10-21:** Stable error responses require testing malformed JSON,
+  validation failures, invalid service output, and dependency failures—not
+  only successful requests. Clients receive concise errors while correlation
+  IDs preserve a path for diagnosis.
+- **2026-10-22:** Runtime invariants should use explicit error handling rather
+  than `assert`. Assertions can be disabled and do not provide a deliberate
+  HTTP response when a service unexpectedly returns an incomplete result.
+- **2026-10-22:** SQLite needs explicit concurrency and integrity decisions.
+  Locking protects a shared connection within one process, WAL mode improves
+  reader/writer behavior, configurable timeouts handle temporary contention,
+  and `INSERT`/`UPDATE` preserve duplicate and missing-job errors that
+  `REPLACE` could hide.
+- **2026-10-22:** Configuration values often need transformation as well as
+  validation. Database usernames, passwords, and names must be URL-encoded
+  before being assembled into a connection string.
+- **2026-10-23:** Multi-stage Docker builds let development and runtime images
+  share locked runtime dependencies while keeping tests and development tools
+  out of the production image. Running as a non-root user and persisting data
+  through named volumes should be designed in from the start.
+- **2026-10-23:** Observability is also a security boundary. Structured request
+  metadata and correlation IDs are useful, but exception messages from future
+  adapters must be sanitized before they are written to logs.
 
 ## What's next
 
