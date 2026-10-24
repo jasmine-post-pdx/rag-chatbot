@@ -1,1 +1,1 @@
-"""RAG engineering lab application package."""
+"""Application package for the RAG engineering lab."""

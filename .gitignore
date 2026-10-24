@@ -65,6 +65,9 @@ db.sqlite3-journal
 instance/
 .webassets-cache
 
+# SQLite question job store
+data/questions.db
+
 # Scrapy stuff:
 .scrapy
 

@@ -1,0 +1,9 @@
+# Runtime dependencies
+fastapi>=0.115
+pydantic-settings>=2.0
+uvicorn>=0.30
+
+# Development dependencies
+pytest>=8.0
+ruff>=0.6
+httpx2>=0.1
