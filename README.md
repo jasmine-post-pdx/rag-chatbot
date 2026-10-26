@@ -23,7 +23,7 @@ The project began as a single FastAPI endpoint that accepted a question and
 returned a placeholder answer. I reorganized that into a more conventional
 application structure so each part of the pipeline can evolve independently:
 
-- `app/api/main.py` is the HTTP entry point. It wires the question service
+- `app/api/main.py` is the HTTP entry point. It wires the question workflow
   through FastAPI dependency injection and maps errors to clean HTTP responses.
 - `app/api/schemas.py` currently holds the public polling response schema.
   Other request and response models still live in the API and service modules;
@@ -31,24 +31,23 @@ application structure so each part of the pipeline can evolve independently:
 - `app/core/config.py` centralizes settings loaded from environment variables
   and an optional `.env` file. It keeps environment-specific values out of the
   source code.
-- `app/services/questions.py` currently implements both the question-job
-  lifecycle and SQLite persistence. Completed jobs survive restarts and can be
-  retrieved through the status endpoint. A future storage abstraction could
-  separate orchestration from SQLite and support other job stores.
+- `app/services/question_workflow.py` coordinates job creation, answer
+  processing, and persistence. The processor interface and placeholder live in
+  `app/services/question_processor.py`; the `QuestionJobStore` interface and
+  SQLite implementation live under `app/stores/`. Completed and failed jobs
+  survive restarts and can be retrieved through the status endpoint.
 - `app/retrieval/` will own chunking, indexing, search, ranking, and context
   assembly once the retrieval adapters are added.
-- `app/models/` will hold LLM and embedding adapters when real generation is
-  wired up.
+- `app/models/` holds question-domain DTOs and will hold LLM and embedding
+  adapters when real generation is wired up.
 - `app/tools/` is reserved for optional callable tools the generator can use.
 - `tests/unit/`, `tests/integration/`, and `tests/evals/` mirror these
   responsibilities and hold the corresponding automated tests.
 
-This structure establishes boundaries that will be strengthened as the RAG
-pipeline develops. API handlers are kept thin, while the current question
-service handles both job orchestration and SQLite persistence. Retrieval,
-model, and tool packages are placeholders for future adapters. Public API
-schemas are partially separated from internal models, with further separation
-planned as the contract grows.
+This structure keeps API handlers thin and separates workflow, answer
+processing, and job persistence. Retrieval, model, and tool packages remain
+future adapters. Processing failures are stored as failed jobs with the safe
+`processing_error` category; submission still returns a generic HTTP 500.
 
 ## What I'm learning here
 
@@ -235,6 +234,12 @@ INFO:     Request completed request_id=<uuid> method=POST route=/v1/questions st
 INFO:     Request completed request_id=<uuid> method=POST route=/v1/questions status=500 elapsed_ms=5.7 error_category=server
 ```
 
+If question processing fails after the job is saved, the generic `500` response
+also includes an `x-question-id` header. Use that ID to poll
+`GET /v1/questions/{request_id}`; the job response reports `status: "failed"`
+and `error_category: "processing_error"` without exposing provider exception
+details.
+
 Request logging does not intentionally include request bodies, answers,
 credentials, or settings objects. Correlation and request metadata are emitted
 as structured key/value fields using the standard library. Exception handlers
@@ -356,7 +361,7 @@ projects.
 - [ ] Add real document ingestion (load, chunk, embed) under `app/retrieval/`.
 - [ ] Add a local or API-based embedding model adapter under `app/models/`.
 - [ ] Add a generation adapter that builds prompts from retrieved context.
-- [ ] Replace the placeholder answer in `complete_job` with a real RAG chain.
+- [ ] Replace the placeholder processor with retrieval-grounded generation.
 - [ ] Store chunks and embeddings in the Postgres/pgvector container.
 - [ ] Add retrieval-quality evaluations under `tests/evals/`.
 - [x] Move database path and model settings into configuration or environment

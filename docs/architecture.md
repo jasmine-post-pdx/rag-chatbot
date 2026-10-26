@@ -9,21 +9,28 @@ document ingestion, retrieval, and model integrations are still future work.
 ```text
 client
   -> FastAPI routes and request middleware (`app/api/`)
-    -> shared `QuestionService` (`app/services/questions.py`)
-      -> SQLite question-job database
+    -> `QuestionWorkflow` (`app/services/question_workflow.py`)
+      -> `QuestionProcessor` (`app/services/question_processor.py`)
+      -> `QuestionJobStore` (`app/stores/question_jobs.py`)
+        -> `SQLiteQuestionJobStore` (`app/stores/sqlite_question_jobs.py`)
 ```
 
 | Area | Current responsibility |
 | --- | --- |
 | `app/api/` | Health and readiness checks, synchronous question submission, job status responses, validation, and request correlation. |
 | `app/core/` | Environment-based settings and standard-library logging configuration. |
-| `app/services/questions.py` | Question-job lifecycle, SQLite persistence, and the placeholder answer. Storage and orchestration currently live together. |
-| `app/api/schemas.py` | Public response model for job status. Other API and result models remain in `main.py` and `services/questions.py`. |
-| `app/models/`, `app/retrieval/`, `app/tools/` | Package placeholders; no model, retrieval, or tool behavior is implemented yet. |
+| `app/services/question_workflow.py` | Coordinates job creation, answer processing, and success or failure persistence. |
+| `app/services/question_processor.py` | Processor interface and the current placeholder answer implementation. |
+| `app/stores/` | Job-store interface and SQLite-backed implementation. |
+| `app/models/questions.py` | Internal job and answer DTOs shared by processing, storage, and API layers. |
+| `app/api/schemas.py` | Public response model for job status, including safe processing failure categories. |
+| `app/retrieval/`, `app/tools/` | Package placeholders; no retrieval or tool behavior is implemented yet. |
 
-The service is initialized during the FastAPI application lifespan and shared
-with routes through dependency injection. Question submission currently
-creates, completes, and returns a job in one request. SQLite stores the job;
+The workflow and SQLite store are initialized during the FastAPI application
+lifespan and shared with routes through dependency injection. Question
+submission creates, processes, and returns a job in one request. Processing
+failures are persisted as failed jobs with a safe error category; the submit
+request still returns a generic server error. SQLite stores the job;
 the optional Compose pgvector service is not connected to the application.
 
 The `data/raw/`, `data/processed/`, and `scripts/` directories are reserved for
@@ -57,8 +64,6 @@ client -> API -> service/orchestrator -> retrieval -> model generation -> answer
   whether processing needs a background worker after real pipeline latency is
   understood.
 - Add retrieval and answer-quality evaluations under `tests/evals/`.
-- Consider separating job orchestration from SQLite persistence when another
-  job store or a different deployment model is needed.
 
 ## Decisions
 

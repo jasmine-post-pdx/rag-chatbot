@@ -9,7 +9,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from app.services.questions import QuestionResult
+from app.models.questions import QuestionResult
 
 
 class QuestionJobResponse(BaseModel):
@@ -22,5 +22,7 @@ class QuestionJobResponse(BaseModel):
     """
 
     request_id: str
-    status: Literal["pending", "completed"]
+    status: Literal["pending", "completed", "failed"]
     result: QuestionResult | None = None
+    # Controlled category only; provider exception details stay in server logs.
+    error_category: Literal["processing_error"] | None = None
