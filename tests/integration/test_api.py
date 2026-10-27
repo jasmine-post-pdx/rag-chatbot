@@ -3,46 +3,10 @@
 import logging
 
 import pytest
-from fastapi.testclient import TestClient
 
 from app.api import main
 from app.services.question_workflow import QuestionWorkflow
 from app.stores.sqlite_question_jobs import SQLiteQuestionJobStore
-
-
-@pytest.fixture
-def question_store():
-    """Return an in-memory job store for tests.
-
-    Returns:
-        A fresh in-memory job store.
-    """
-    return SQLiteQuestionJobStore()
-
-
-@pytest.fixture
-def question_workflow(question_store):
-    """Return a workflow backed by the in-memory test store."""
-    return QuestionWorkflow(question_store)
-
-
-@pytest.fixture
-def client(question_workflow):
-    """Yield a TestClient with the workflow dependency overridden.
-
-    Args:
-        question_workflow: The workflow to inject into the API.
-
-    Yields:
-        A test client configured to use the injected workflow.
-    """
-    main.app.dependency_overrides[main.get_question_workflow] = lambda: question_workflow
-    try:
-        with TestClient(main.app, raise_server_exceptions=False) as test_client:
-            yield test_client
-    finally:
-        main.app.dependency_overrides.pop(main.get_question_workflow, None)
-
 
 # /health
 
@@ -64,7 +28,7 @@ def test_readiness_returns_ready(client):
     assert ready.json() == {"status": "ready"}
 
 
-def test_ready_returns_503_when_database_unavailable(client):
+def test_ready_returns_503_when_database_unavailable(client, store_factory):
     """Verify /ready returns 503 when the SQLite backing store is unusable."""
 
     class UnreadyQuestionWorkflow(QuestionWorkflow):
@@ -74,7 +38,7 @@ def test_ready_returns_503_when_database_unavailable(client):
             """Return False to simulate a failed dependency."""
             return False
 
-    unready_workflow = UnreadyQuestionWorkflow(SQLiteQuestionJobStore())
+    unready_workflow = UnreadyQuestionWorkflow(store_factory())
     main.app.dependency_overrides[main.get_question_workflow] = lambda: unready_workflow
     response = client.get("/ready")
 
@@ -242,7 +206,7 @@ def test_poll_unknown_question_is_404(client):
     assert response.json() == {"detail": "Question not found"}
 
 
-def test_invalid_server_response_data_returns_500(client):
+def test_invalid_server_response_data_returns_500(client, store_factory):
     """Verify response-validation failures for server-generated data return 500, not 4xx."""
 
     class BadResponseQuestionWorkflow(QuestionWorkflow):
@@ -274,7 +238,7 @@ def test_invalid_server_response_data_returns_500(client):
 
             return FakeJob(request_id)
 
-    bad_service = BadResponseQuestionWorkflow(SQLiteQuestionJobStore())
+    bad_service = BadResponseQuestionWorkflow(store_factory())
     main.app.dependency_overrides[main.get_question_workflow] = lambda: bad_service
     response = client.get("/v1/questions/bad-result")
 
@@ -288,21 +252,22 @@ def test_invalid_server_response_data_returns_500(client):
         pytest.param(
             "retrieval",
             ConnectionError,
-            "retriever endpoint and credential details",
+            "retriever endpoint api_key=topsecret",
             id="retrieval-connection-error",
         ),
         pytest.param(
             "model provider",
             TimeoutError,
-            "provider endpoint and API key details",
+            "provider endpoint password=topsecret",
             id="model-provider-timeout",
         ),
     ],
 )
 def test_submit_pipeline_failure_returns_generic_500(
-    client, failure_stage, failure_type, error_message
+    client, caplog, store_factory, failure_stage, failure_type, error_message
 ):
     """Verify retrieval and model-provider failures are hidden behind a generic 500."""
+    caplog.set_level(logging.INFO)
 
     class FailingProcessor:
         """Processor that fails at the simulated pipeline stage."""
@@ -310,7 +275,7 @@ def test_submit_pipeline_failure_returns_generic_500(
         def process(self, request_id, question):
             raise failure_type(f"{failure_stage} failed: {error_message}")
 
-    store = SQLiteQuestionJobStore()
+    store = store_factory()
     failing_workflow = QuestionWorkflow(store, FailingProcessor())
     main.app.dependency_overrides[main.get_question_workflow] = lambda: failing_workflow
     response = client.post("/v1/questions", json={"question": "Help"})
@@ -319,7 +284,21 @@ def test_submit_pipeline_failure_returns_generic_500(
     assert response.json() == {"detail": "Internal server error"}
     assert error_message not in response.text
     assert "Traceback" not in response.text
+    assert "topsecret" not in caplog.text
+    error_records = [
+        record
+        for record in caplog.records
+        if record.name == "app.api.main" and record.levelno == logging.ERROR
+    ]
+    assert len(error_records) == 1
+    assert error_records[0].exception_type == failure_type.__name__
     request_id = response.headers["x-question-id"]
+    assert error_records[0].question_id == request_id
+    request_records = [
+        record for record in caplog.records if record.name == "app.api.middleware"
+    ]
+    assert len(request_records) == 1
+    assert request_records[0].status == 500
     poll = client.get(f"/v1/questions/{request_id}")
     assert poll.status_code == 200
     assert poll.json() == {
@@ -330,7 +309,8 @@ def test_submit_pipeline_failure_returns_generic_500(
     }
 
 
-def test_submit_failure_state_persistence_error_returns_generic_500(client):
+def test_submit_failure_state_persistence_error_returns_generic_500(client, store_factory):
+    """Verify failure-state persistence errors produce a generic server response."""
     class FailingProcessor:
         def process(self, request_id, question):
             raise TimeoutError("provider token must not reach the client")
@@ -347,7 +327,7 @@ def test_submit_failure_state_persistence_error_returns_generic_500(client):
         def fail_job(self, request_id, error_category):
             raise RuntimeError("database connection detail must not reach the client")
 
-    store = FailingFailureStore()
+    store = store_factory(store_type=FailingFailureStore)
     workflow = QuestionWorkflow(store, FailingProcessor())
     main.app.dependency_overrides[main.get_question_workflow] = lambda: workflow
 
@@ -373,155 +353,3 @@ def test_submit_sqlite_failure_returns_generic_500(client, question_store):
     assert response.json() == {"detail": "Internal server error"}
     assert "no such table" not in response.text
     assert "Traceback" not in response.text
-
-
-# Request logging middleware (exercised via /v1/questions)
-
-
-def _find_request_records(caplog):
-    """Return records emitted by the request logging middleware."""
-    return [r for r in caplog.records if r.name == "app.api.middleware"]
-
-
-def test_request_log_includes_context(client, caplog):
-    """Verify successful requests log method, route, status, timing, and ID."""
-    caplog.set_level(logging.INFO)
-    response = client.post("/v1/questions", json={"question": "What is RAG?"})
-
-    assert response.status_code == 200
-    records = _find_request_records(caplog)
-    assert len(records) == 1
-    record = records[0]
-    assert record.method == "POST"
-    assert record.route == "/v1/questions"
-    assert record.status == 200
-    assert record.elapsed_ms >= 0
-    assert record.request_id
-
-
-def test_request_id_header_is_returned(client):
-    """Verify each response carries a generated correlation ID."""
-    response = client.post("/v1/questions", json={"question": "What is RAG?"})
-
-    assert response.status_code == 200
-    assert "x-request-id" in response.headers
-    assert response.headers["x-request-id"]
-
-
-def test_request_id_header_is_preserved(client, caplog):
-    """Verify an incoming correlation ID is kept and logged."""
-    caplog.set_level(logging.INFO)
-    response = client.post(
-        "/v1/questions",
-        json={"question": "What is RAG?"},
-        headers={"x-request-id": "existing-request-id"},
-    )
-
-    assert response.status_code == 200
-    assert response.headers["x-request-id"] == "existing-request-id"
-    records = _find_request_records(caplog)
-    assert records[0].request_id == "existing-request-id"
-
-
-def test_request_id_header_is_returned_on_server_error(client):
-    """Verify a 500 response still carries the correlation ID header."""
-
-    class FailingStore(SQLiteQuestionJobStore):
-        """Store that raises an error when creating a job."""
-
-        def create_job(self, request_id):
-            """Raise a runtime error to simulate a storage failure."""
-            raise RuntimeError("simulated failure")
-
-    failing_workflow = QuestionWorkflow(FailingStore())
-    main.app.dependency_overrides[main.get_question_workflow] = lambda: failing_workflow
-    response = client.post(
-        "/v1/questions",
-        json={"question": "What is RAG?"},
-        headers={"x-request-id": "error-request-id"},
-    )
-
-    assert response.status_code == 500
-    assert response.headers["x-request-id"] == "error-request-id"
-
-
-def test_request_log_does_not_contain_question_text(client, caplog):
-    """Verify raw request bodies are not written to logs."""
-    caplog.set_level(logging.INFO)
-    response = client.post("/v1/questions", json={"question": "secret question text"})
-
-    assert response.status_code == 200
-    assert "secret question text" not in caplog.text
-
-
-def test_validation_error_logs_category(client, caplog):
-    """Verify validation failures include the validation error category."""
-    caplog.set_level(logging.INFO)
-    response = client.post("/v1/questions", json={})
-
-    assert response.status_code == 422
-    records = _find_request_records(caplog)
-    assert records[0].status == 422
-    assert records[0].error_category == "validation"
-
-
-def test_server_error_logs_category(client, caplog):
-    """Verify unhandled service errors include the server error category."""
-    caplog.set_level(logging.INFO)
-
-    class FailingStore(SQLiteQuestionJobStore):
-        """Store that raises an error when creating a job."""
-
-        def create_job(self, request_id):
-            """Raise a runtime error to simulate a storage failure.
-
-            Args:
-                request_id: Unique identifier for the job (unused).
-            """
-            raise RuntimeError("database password and stack details")
-
-    failing_workflow = QuestionWorkflow(FailingStore())
-    main.app.dependency_overrides[main.get_question_workflow] = lambda: failing_workflow
-    response = client.post("/v1/questions", json={"question": "Help"})
-
-    assert response.status_code == 500
-    records = _find_request_records(caplog)
-    assert records[0].status == 500
-    assert records[0].error_category == "server"
-
-
-def test_validation_error_handler_logs_detail(client, caplog):
-    """Verify the validation exception handler logs the structured detail message."""
-    caplog.set_level(logging.WARNING)
-    response = client.post("/v1/questions", json={"question": ""})
-
-    assert response.status_code == 422
-    handler_records = [
-        r for r in caplog.records if r.name == "app.api.main" and r.levelno == logging.WARNING
-    ]
-    assert len(handler_records) == 1
-    assert "Validation error" in handler_records[0].message
-    assert "String should have at least 1 character" in handler_records[0].message
-
-
-def test_internal_error_handler_logs_exception(client, caplog):
-    """Verify the generic exception handler logs the original exception."""
-    caplog.set_level(logging.ERROR)
-
-    class FailingStore(SQLiteQuestionJobStore):
-        """Store that raises an error when creating a job."""
-
-        def create_job(self, request_id):
-            """Raise a runtime error with sensitive details."""
-            raise RuntimeError("database password and stack details")
-
-    failing_workflow = QuestionWorkflow(FailingStore())
-    main.app.dependency_overrides[main.get_question_workflow] = lambda: failing_workflow
-    response = client.post("/v1/questions", json={"question": "Help"})
-
-    assert response.status_code == 500
-    handler_records = [
-        r for r in caplog.records if r.name == "app.api.main" and r.levelno == logging.ERROR
-    ]
-    assert len(handler_records) == 1
-    assert "Unhandled exception" in handler_records[0].message

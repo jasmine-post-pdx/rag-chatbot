@@ -1,15 +1,11 @@
 """Coordinate question processing with question job persistence."""
 
-import logging
-
 from app.models.questions import QuestionJob, QuestionResult
 from app.services.question_processor import (
     PlaceholderQuestionProcessor,
     QuestionProcessor,
 )
 from app.stores.question_jobs import QuestionJobStore
-
-logger = logging.getLogger(__name__)
 
 
 class QuestionProcessingError(Exception):
@@ -38,13 +34,6 @@ class QuestionWorkflow:
                 )
         except Exception as exc:
             self._store.fail_job(request_id, "processing_error")
-            # Provider exception messages can contain credentials or request
-            # data, so log the exception type without its raw message.
-            logger.error(
-                "Question processing failed for %s with %s",
-                request_id,
-                type(exc).__name__,
-            )
             raise QuestionProcessingError(request_id) from exc
         self._store.complete_job(request_id, result)
         return result

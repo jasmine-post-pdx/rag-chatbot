@@ -13,7 +13,11 @@ from pydantic import BaseModel, StringConstraints
 from app.api.middleware import REQUEST_ID_HEADER, RequestLogMiddleware
 from app.api.schemas import QuestionJobResponse
 from app.core.config import settings
-from app.core.logging import configure_logging
+from app.core.logging import (
+    configure_logging,
+    log_exception_summary,
+    log_validation_failure,
+)
 from app.models.questions import QuestionResult
 from app.services.question_workflow import QuestionProcessingError, QuestionWorkflow
 from app.stores.sqlite_question_jobs import SQLiteQuestionJobStore
@@ -105,7 +109,7 @@ async def request_validation_error_handler(
         message = error.get("msg", "Invalid value")
         issues.append(f"{location}: {message}" if location else message)
     detail = "Invalid request: " + "; ".join(issues)
-    logger.warning("Validation error: %s", detail)
+    log_validation_failure(logger, request.state.request_id)
     response = JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         content=ValidationErrorResponse(detail=detail).model_dump(),
@@ -126,7 +130,15 @@ async def internal_error_handler(request: Request, exc: Exception) -> JSONRespon
         A JSON response with a generic internal server error detail.
     """
     request.state.error_category = "server"
-    logger.exception("Unhandled exception: %s", exc)
+    logged_exception = exc.__cause__ if isinstance(exc, QuestionProcessingError) else exc
+    log_exception_summary(
+        logger,
+        logged_exception or exc,
+        message="Unhandled exception",
+        request_id=request.state.request_id,
+        error_category="server",
+        question_id=exc.request_id if isinstance(exc, QuestionProcessingError) else None,
+    )
     response = JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content=ServerErrorResponse(detail="Internal server error").model_dump(),

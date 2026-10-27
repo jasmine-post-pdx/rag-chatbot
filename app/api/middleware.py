@@ -10,10 +10,11 @@ unchanged.
 
 import logging
 import time
-from uuid import uuid4
 
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
+
+from app.core.logging import log_request_summary, normalize_request_id
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,7 @@ class RequestLogMiddleware(BaseHTTPMiddleware):
             The response produced by the handler stack, with ``x-request-id``
             attached.
         """
-        request_id = request.headers.get(REQUEST_ID_HEADER) or str(uuid4())
+        request_id = normalize_request_id(request.headers.get(REQUEST_ID_HEADER))
         request.state.request_id = request_id
 
         start = time.perf_counter()
@@ -52,16 +53,14 @@ class RequestLogMiddleware(BaseHTTPMiddleware):
             response = await call_next(request)
         except Exception:
             elapsed_ms = (time.perf_counter() - start) * 1000
-            logger.exception(
-                "Request failed",
-                extra={
-                    "request_id": request_id,
-                    "method": request.method,
-                    "route": request.url.path,
-                    "status": 500,
-                    "elapsed_ms": round(elapsed_ms, 3),
-                    "error_category": "server",
-                },
+            log_request_summary(
+                logger,
+                request_id=request_id,
+                method=request.method,
+                route=request.url.path,
+                status=500,
+                elapsed_ms=round(elapsed_ms, 3),
+                error_category="server",
             )
             raise
 
@@ -70,16 +69,14 @@ class RequestLogMiddleware(BaseHTTPMiddleware):
         if error_category is None:
             error_category = _error_category_for_status(response.status_code)
 
-        log_extra: dict[str, object] = {
-            "request_id": request_id,
-            "method": request.method,
-            "route": request.url.path,
-            "status": response.status_code,
-            "elapsed_ms": round(elapsed_ms, 3),
-        }
-        if error_category is not None:
-            log_extra["error_category"] = error_category
-
-        logger.info("Request completed", extra=log_extra)
+        log_request_summary(
+            logger,
+            request_id=request_id,
+            method=request.method,
+            route=request.url.path,
+            status=response.status_code,
+            elapsed_ms=round(elapsed_ms, 3),
+            error_category=error_category,
+        )
         response.headers[REQUEST_ID_HEADER] = request_id
         return response

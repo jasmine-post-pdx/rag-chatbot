@@ -1,7 +1,5 @@
 """Unit tests for question job storage and workflow."""
 
-import logging
-
 import pytest
 
 from app.models.questions import (
@@ -11,7 +9,6 @@ from app.models.questions import (
     RetrievalMetrics,
 )
 from app.services.question_workflow import QuestionProcessingError, QuestionWorkflow
-from app.stores.sqlite_question_jobs import SQLiteQuestionJobStore
 
 
 def _result(request_id: str) -> QuestionResult:
@@ -26,8 +23,12 @@ def _result(request_id: str) -> QuestionResult:
     )
 
 
-def test_create_job_stores_pending_job():
-    store = SQLiteQuestionJobStore(":memory:")
+# SQLite job store tests
+
+
+def test_create_job_stores_pending_job(store_factory):
+    """Verify job creation persists a pending job."""
+    store = store_factory(":memory:")
 
     job = store.create_job("req-1")
 
@@ -35,16 +36,18 @@ def test_create_job_stores_pending_job():
     assert store.get_job("req-1") == job
 
 
-def test_create_job_duplicate_request_id_raises():
-    store = SQLiteQuestionJobStore(":memory:")
+def test_create_job_duplicate_request_id_raises(store_factory):
+    """Verify creating a duplicate job raises a value error."""
+    store = store_factory(":memory:")
     store.create_job("req-1")
 
     with pytest.raises(ValueError, match="Job already exists: req-1"):
         store.create_job("req-1")
 
 
-def test_complete_job_persists_supplied_result():
-    store = SQLiteQuestionJobStore(":memory:")
+def test_complete_job_persists_supplied_result(store_factory):
+    """Verify completion persists the supplied result."""
+    store = store_factory(":memory:")
     store.create_job("req-1")
 
     completed = store.complete_job("req-1", _result("req-1"))
@@ -54,23 +57,31 @@ def test_complete_job_persists_supplied_result():
     assert store.get_job("req-1") == completed
 
 
-def test_complete_job_unknown_request_id_raises():
-    store = SQLiteQuestionJobStore(":memory:")
+def test_complete_job_unknown_request_id_raises(store_factory):
+    """Verify completion fails when the job does not exist."""
+    store = store_factory(":memory:")
 
     with pytest.raises(ValueError, match="Job not found: missing"):
         store.complete_job("missing", _result("missing"))
 
 
-def test_complete_job_rejects_result_for_different_request_id():
-    store = SQLiteQuestionJobStore(":memory:")
+def test_complete_job_rejects_result_for_different_request_id(store_factory):
+    """Verify mismatched results are rejected without changing the pending job."""
+    store = store_factory(":memory:")
     store.create_job("req-1")
 
     with pytest.raises(ValueError, match="Result request ID does not match job"):
         store.complete_job("req-1", _result("req-2"))
 
+    job = store.get_job("req-1")
+    assert job is not None
+    assert job.status == "pending"
+    assert job.result is None
 
-def test_fail_job_persists_safe_error_category():
-    store = SQLiteQuestionJobStore(":memory:")
+
+def test_fail_job_persists_safe_error_category(store_factory):
+    """Verify failure persists the safe error category."""
+    store = store_factory(":memory:")
     store.create_job("req-1")
 
     failed = store.fail_job("req-1", "processing_error")
@@ -81,15 +92,82 @@ def test_fail_job_persists_safe_error_category():
     assert store.get_job("req-1") == failed
 
 
-def test_fail_job_unknown_request_id_raises():
-    store = SQLiteQuestionJobStore(":memory:")
+def test_fail_job_unknown_request_id_raises(store_factory):
+    """Verify failure persistence rejects an unknown job ID."""
+    store = store_factory(":memory:")
 
     with pytest.raises(ValueError, match="Job not found: missing"):
         store.fail_job("missing", "processing_error")
 
 
-def test_workflow_completes_job_with_placeholder_result():
-    store = SQLiteQuestionJobStore(":memory:")
+def test_get_job_unknown_request_id_returns_none(store_factory):
+    """Verify looking up an unknown job returns None."""
+    store = store_factory(":memory:")
+
+    assert store.get_job("missing") is None
+
+
+def test_is_ready_true_for_healthy_database(store_factory):
+    """Verify readiness returns true for a usable database."""
+    store = store_factory(":memory:")
+
+    assert store.is_ready() is True
+
+
+def test_close_makes_database_unready(store_factory):
+    """Verify closing the store makes readiness checks fail."""
+    store = store_factory(":memory:")
+    store.close()
+
+    assert store.is_ready() is False
+
+
+def test_file_backed_database_uses_wal_mode(tmp_path, store_factory):
+    """Verify file-backed databases use WAL journal mode."""
+    store = store_factory(str(tmp_path / "questions.db"))
+
+    row = store._conn.execute("PRAGMA journal_mode").fetchone()
+    assert row is not None
+    assert row[0] == "wal"
+
+
+def test_completed_and_failed_jobs_survive_store_reopen(tmp_path, store_factory):
+    """Verify completed and failed jobs persist after reopening the store."""
+    db_path = str(tmp_path / "questions.db")
+    first_store = store_factory(db_path)
+    first_store.create_job("completed-job")
+    completed = _result("completed-job")
+    first_store.complete_job("completed-job", completed)
+    first_store.create_job("failed-job")
+    first_store.fail_job("failed-job", "processing_error")
+    first_store.close()
+
+    reopened_store = store_factory(db_path)
+
+    completed_job = reopened_store.get_job("completed-job")
+    assert completed_job is not None
+    assert completed_job.result == completed
+    failed = reopened_store.get_job("failed-job")
+    assert failed is not None
+    assert failed.status == "failed"
+    assert failed.error_category == "processing_error"
+
+
+def test_database_timeout_is_configurable(store_factory):
+    """Verify the configured timeout is applied to SQLite busy waits."""
+    store = store_factory(":memory:", timeout=10.0)
+
+    row = store._conn.execute("PRAGMA busy_timeout").fetchone()
+    assert row is not None
+    assert row[0] == 10_000
+
+
+# Workflow tests
+
+
+def test_workflow_completes_job_with_placeholder_result(store_factory):
+    """Verify the default processor completes a job with its placeholder result."""
+    store = store_factory(":memory:")
     workflow = QuestionWorkflow(store)
 
     result = workflow.submit("req-1", "What is RAG?")
@@ -100,7 +178,8 @@ def test_workflow_completes_job_with_placeholder_result():
     assert job.status == "completed"
 
 
-def test_workflow_passes_question_to_processor_and_persists_its_result():
+def test_workflow_passes_question_to_processor_and_persists_its_result(store_factory):
+    """Verify the workflow forwards inputs and persists the processor result."""
     expected = _result("req-custom")
 
     class RecordingProcessor:
@@ -111,7 +190,7 @@ def test_workflow_passes_question_to_processor_and_persists_its_result():
             self.call = (request_id, question)
             return expected
 
-    store = SQLiteQuestionJobStore(":memory:")
+    store = store_factory(":memory:")
     processor = RecordingProcessor()
     workflow = QuestionWorkflow(store, processor)
 
@@ -125,22 +204,20 @@ def test_workflow_passes_question_to_processor_and_persists_its_result():
     assert job.result == expected
 
 
-def test_workflow_persists_failure_and_logs_safe_processor_diagnostic(caplog):
+def test_workflow_persists_failure_and_reraises_processor_exception(store_factory):
+    """Verify processor failures are persisted and wrapped with their cause."""
     class FailingProcessor:
         def process(self, request_id: str, question: str) -> QuestionResult:
             raise TimeoutError("private provider endpoint and credential detail")
 
-    store = SQLiteQuestionJobStore(":memory:")
+    store = store_factory(":memory:")
     workflow = QuestionWorkflow(store, FailingProcessor())
-    caplog.set_level(logging.ERROR, logger="app.services.question_workflow")
 
     with pytest.raises(QuestionProcessingError) as error:
         workflow.submit("req-1", "What is RAG?")
 
     assert isinstance(error.value.__cause__, TimeoutError)
     assert "private provider endpoint" in str(error.value.__cause__)
-    assert "TimeoutError" in caplog.text
-    assert "credential detail" not in caplog.text
 
     job = store.get_job("req-1")
     assert job is not None
@@ -149,12 +226,13 @@ def test_workflow_persists_failure_and_logs_safe_processor_diagnostic(caplog):
     assert job.result is None
 
 
-def test_workflow_marks_mismatched_processor_result_as_failed():
+def test_workflow_marks_mismatched_processor_result_as_failed(store_factory):
+    """Verify a processor result for another job ID becomes a processing failure."""
     class MismatchedProcessor:
         def process(self, request_id: str, question: str) -> QuestionResult:
             return _result("different-request")
 
-    store = SQLiteQuestionJobStore(":memory:")
+    store = store_factory(":memory:")
     workflow = QuestionWorkflow(store, MismatchedProcessor())
 
     with pytest.raises(QuestionProcessingError) as error:
@@ -165,55 +243,3 @@ def test_workflow_marks_mismatched_processor_result_as_failed():
     assert job is not None
     assert job.status == "failed"
     assert job.error_category == "processing_error"
-
-
-def test_get_job_unknown_request_id_returns_none():
-    store = SQLiteQuestionJobStore(":memory:")
-
-    assert store.get_job("missing") is None
-
-
-def test_is_ready_true_for_healthy_database():
-    store = SQLiteQuestionJobStore(":memory:")
-
-    assert store.is_ready() is True
-
-
-def test_close_makes_database_unready():
-    store = SQLiteQuestionJobStore(":memory:")
-    store.close()
-
-    assert store.is_ready() is False
-
-
-def test_file_backed_database_uses_wal_mode(tmp_path):
-    store = SQLiteQuestionJobStore(str(tmp_path / "questions.db"))
-
-    row = store._conn.execute("PRAGMA journal_mode").fetchone()
-    assert row is not None
-    assert row[0] == "wal"
-
-
-def test_completed_and_failed_jobs_survive_store_reopen(tmp_path):
-    db_path = str(tmp_path / "questions.db")
-    first_store = SQLiteQuestionJobStore(db_path)
-    first_store.create_job("completed-job")
-    completed = _result("completed-job")
-    first_store.complete_job("completed-job", completed)
-    first_store.create_job("failed-job")
-    first_store.fail_job("failed-job", "processing_error")
-    first_store.close()
-
-    reopened_store = SQLiteQuestionJobStore(db_path)
-
-    assert reopened_store.get_job("completed-job").result == completed
-    failed = reopened_store.get_job("failed-job")
-    assert failed is not None
-    assert failed.status == "failed"
-    assert failed.error_category == "processing_error"
-
-
-def test_database_timeout_is_configurable():
-    store = SQLiteQuestionJobStore(":memory:", timeout=10.0)
-
-    assert store.is_ready() is True

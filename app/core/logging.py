@@ -7,8 +7,10 @@ OpenTelemetry span/log attributes if the project later adopts OTel.
 """
 
 import logging
+import re
 import sys
 from typing import ClassVar
+from uuid import uuid4
 
 from app.core.config import settings
 
@@ -24,11 +26,13 @@ class RequestFormatter(logging.Formatter):
 
     _ordered_keys: ClassVar[list[str]] = [
         "request_id",
+        "question_id",
         "method",
         "route",
         "status",
         "elapsed_ms",
         "error_category",
+        "exception_type",
     ]
 
     def format(self, record: logging.LogRecord) -> str:
@@ -66,3 +70,84 @@ def configure_logging() -> None:
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(RequestFormatter())
     root.addHandler(handler)
+
+
+_REQUEST_ID_PATTERN = re.compile(r"[A-Za-z0-9._:-]{1,128}\Z")
+_SECRET_ASSIGNMENT_PATTERN = re.compile(
+    r"(?i)(\b(?:password|passwd|secret|token|api[_-]?key|access[_-]?token|"
+    r"refresh[_-]?token|credential|authorization)\b\s*[:=]\s*)"
+    r"(Bearer\s+[^\s,;&]+|\"[^\"]*\"|'[^']*'|[^\s,;&]+)"
+)
+_BEARER_PATTERN = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
+_URL_CREDENTIAL_PATTERN = re.compile(r"(?i)(https?://)[^/@\s]+@")
+
+
+def normalize_request_id(value: str | None) -> str:
+    """Return a safe bounded correlation ID, generating one for invalid input."""
+    if value and _REQUEST_ID_PATTERN.fullmatch(value):
+        return value
+    return str(uuid4())
+
+
+def sanitize_exception_summary(exc: BaseException, max_length: int = 300) -> str:
+    """Redact common credentials and keep exception summaries to one short line."""
+    summary = str(exc)
+    summary = _SECRET_ASSIGNMENT_PATTERN.sub(r"\1<redacted>", summary)
+    summary = _BEARER_PATTERN.sub("Bearer <redacted>", summary)
+    summary = _URL_CREDENTIAL_PATTERN.sub(r"\1<redacted>@", summary)
+    summary = re.sub(r"[\x00-\x1f\x7f]+", " ", summary).strip()
+    if len(summary) > max_length:
+        summary = summary[: max_length - 1].rstrip() + "…"
+    return summary or "No exception message"
+
+
+def log_request_summary(
+    logger: logging.Logger,
+    *,
+    request_id: str,
+    method: str,
+    route: str,
+    status: int,
+    elapsed_ms: float,
+    error_category: str | None = None,
+) -> None:
+    """Emit the standard one-line request summary."""
+    fields: dict[str, object] = {
+        "request_id": request_id,
+        "method": method,
+        "route": route,
+        "status": status,
+        "elapsed_ms": elapsed_ms,
+    }
+    if error_category is not None:
+        fields["error_category"] = error_category
+    logger.info("Request completed", extra=fields)
+
+
+def log_exception_summary(
+    logger: logging.Logger,
+    exc: BaseException,
+    *,
+    message: str,
+    request_id: str,
+    error_category: str,
+    question_id: str | None = None,
+) -> None:
+    """Emit one safe error summary with stable context fields."""
+    fields: dict[str, object] = {
+        "request_id": request_id,
+        "error_category": error_category,
+        "exception_type": type(exc).__name__,
+    }
+    if question_id is not None:
+        fields["question_id"] = question_id
+    summary = sanitize_exception_summary(exc)
+    logger.error("%s: %s", message, summary, extra=fields)
+
+
+def log_validation_failure(logger: logging.Logger, request_id: str) -> None:
+    """Emit a validation warning without logging submitted field values."""
+    logger.warning(
+        "Request validation failed",
+        extra={"request_id": request_id, "error_category": "validation"},
+    )

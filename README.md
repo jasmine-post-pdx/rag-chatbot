@@ -240,13 +240,13 @@ also includes an `x-question-id` header. Use that ID to poll
 and `error_category: "processing_error"` without exposing provider exception
 details.
 
-Request logging does not intentionally include request bodies, answers,
-credentials, or settings objects. Correlation and request metadata are emitted
-as structured key/value fields using the standard library. Exception handlers
-can include exception messages in log messages, but the configured stdout
-formatter does not render traceback text from exception records. Sanitize
-provider exception messages before logging them when external services are
-integrated.
+The middleware owns one request summary; API exception handlers own handled
+error records. Error records include the request ID, category, exception type,
+and a bounded one-line summary. Common credential patterns are redacted, and
+tracebacks are not written to stdout. This redaction is best-effort: provider
+adapters should avoid putting prompts, personal data, or secrets in exception
+messages. Invalid or oversized client-supplied `x-request-id` values are
+replaced with a generated ID before they are logged or returned.
 
 ### Local Postgres with pgvector
 
