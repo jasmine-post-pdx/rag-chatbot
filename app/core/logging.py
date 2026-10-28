@@ -31,6 +31,10 @@ class RequestFormatter(logging.Formatter):
         "route",
         "status",
         "elapsed_ms",
+        "provider",
+        "model",
+        "input_tokens",
+        "output_tokens",
         "error_category",
         "exception_type",
     ]
@@ -89,9 +93,16 @@ def normalize_request_id(value: str | None) -> str:
     return str(uuid4())
 
 
-def sanitize_exception_summary(exc: BaseException, max_length: int = 300) -> str:
+def sanitize_exception_summary(
+    exc: BaseException,
+    max_length: int = 300,
+    sensitive_values: tuple[str, ...] = (),
+) -> str:
     """Redact common credentials and keep exception summaries to one short line."""
     summary = str(exc)
+    for value in sensitive_values:
+        if value:
+            summary = summary.replace(value, "<redacted>")
     summary = _SECRET_ASSIGNMENT_PATTERN.sub(r"\1<redacted>", summary)
     summary = _BEARER_PATTERN.sub("Bearer <redacted>", summary)
     summary = _URL_CREDENTIAL_PATTERN.sub(r"\1<redacted>@", summary)

@@ -108,9 +108,18 @@ Postgres/pgvector connection details, and the application log level
 (`LOG_LEVEL`, default `INFO`). `GENERATION_PROVIDER` selects how questions are
 answered: `local` (the default) returns placeholder answers, and `openai` sends
 the question directly to `GENERATION_MODEL` through the Responses API, without
-retrieval. Any other value fails at startup. The OpenAI adapter reads
-`OPENAI_API_KEY` from the environment; the app starts without it, but each
-question fails, and logs that the key is missing, until it is set.
+retrieval. Any other value fails at startup. `OPENAI_API_KEY` is loaded through
+Pydantic Settings from the environment or `.env` file, stored as a secret
+setting, and has no credential default. If supplied but empty or whitespace-only,
+settings validation fails during startup. The app can start without the
+variable, but an OpenAI-backed question fails until a key is configured. Add
+this to `.env` when using `GENERATION_PROVIDER=openai`:
+
+```dotenv
+OPENAI_API_KEY=your-key-here
+```
+
+Do not commit real credentials to the repository.
 
 Local runs load all of these settings from environment variables or `.env`.
 Docker Compose currently forwards the Postgres settings, sets
@@ -294,6 +303,16 @@ Run the automated tests from the project root:
 ```bash
 pytest
 ```
+
+The real OpenAI Responses API smoke test is skipped by default. To opt in,
+configure `OPENAI_API_KEY` and `OPENAI_SMOKE_MODEL` in the environment or
+`.env`, then run:
+
+```bash
+RUN_OPENAI_SMOKE=1 pytest -m openai_smoke
+```
+
+The smoke test makes a real provider request and may incur API usage charges.
 
 Run the tests inside the Docker `dev` target:
 

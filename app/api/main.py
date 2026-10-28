@@ -38,7 +38,11 @@ async def lifespan(app: FastAPI) -> None:
     """
     configure_logging()
     processor = build_question_processor(
-        settings.generation_provider, settings.generation_model
+        settings.generation_provider,
+        settings.generation_model,
+        settings.openai_api_key.get_secret_value()
+        if settings.openai_api_key is not None
+        else None,
     )
     app.state.question_workflow = QuestionWorkflow(
         store=SQLiteQuestionJobStore(db_path=str(settings.questions_db_path)),
@@ -135,15 +139,24 @@ async def internal_error_handler(request: Request, exc: Exception) -> JSONRespon
         A JSON response with a generic internal server error detail.
     """
     request.state.error_category = "server"
-    logged_exception = exc.__cause__ if isinstance(exc, QuestionProcessingError) else exc
-    log_exception_summary(
-        logger,
-        logged_exception or exc,
-        message="Unhandled exception",
-        request_id=request.state.request_id,
-        error_category="server",
-        question_id=exc.request_id if isinstance(exc, QuestionProcessingError) else None,
-    )
+    if isinstance(exc, QuestionProcessingError):
+        logger.error(
+            "Question processing failed",
+            extra={
+                "request_id": request.state.request_id,
+                "question_id": exc.request_id,
+                "error_category": "processing_error",
+                "exception_type": type(exc.__cause__).__name__ if exc.__cause__ else "Exception",
+            },
+        )
+    else:
+        log_exception_summary(
+            logger,
+            exc,
+            message="Unhandled exception",
+            request_id=request.state.request_id,
+            error_category="server",
+        )
     response = JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content=ServerErrorResponse(detail="Internal server error").model_dump(),
@@ -206,19 +219,25 @@ def ready(
 )
 def submit_question(
     request: QuestionRequest,
+    http_request: Request,
     question_workflow: QuestionWorkflow = Depends(get_question_workflow),  # noqa: B008
 ) -> QuestionResult:
     """Process a question and return its answer and metadata.
 
     Args:
         request: The question payload from the client.
+        http_request: The HTTP request containing the middleware correlation ID.
         question_workflow: The workflow used to process and persist the job.
 
     Returns:
         The answer and its retrieval and model metadata.
     """
     request_id = str(uuid4())
-    return question_workflow.submit(request_id, request.question)
+    return question_workflow.submit(
+        request_id,
+        request.question,
+        correlation_id=http_request.state.request_id,
+    )
 
 
 @app.get("/v1/questions/{request_id}", response_model=QuestionJobResponse)

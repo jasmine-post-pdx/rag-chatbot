@@ -12,13 +12,25 @@ from app.models.questions import (
 class QuestionProcessor(Protocol):
     """Produces an answer result for a question."""
 
-    def process(self, request_id: str, question: str) -> QuestionResult: ...
+    def process(
+        self,
+        request_id: str,
+        question: str,
+        *,
+        correlation_id: str | None = None,
+    ) -> QuestionResult: ...
 
 
 class PlaceholderQuestionProcessor:
     """Return the current placeholder answer until RAG adapters exist."""
 
-    def process(self, request_id: str, question: str) -> QuestionResult:
+    def process(
+        self,
+        request_id: str,
+        question: str,
+        *,
+        correlation_id: str | None = None,
+    ) -> QuestionResult:
         return QuestionResult(
             request_id=request_id,
             answer=f"This is a placeholder answer for: {question}",

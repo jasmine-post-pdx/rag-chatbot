@@ -272,7 +272,7 @@ def test_submit_pipeline_failure_returns_generic_500(
     class FailingProcessor:
         """Processor that fails at the simulated pipeline stage."""
 
-        def process(self, request_id, question):
+        def process(self, request_id, question, *, correlation_id=None):
             raise failure_type(f"{failure_stage} failed: {error_message}")
 
     store = store_factory()
@@ -312,7 +312,7 @@ def test_submit_pipeline_failure_returns_generic_500(
 def test_submit_failure_state_persistence_error_returns_generic_500(client, store_factory):
     """Verify failure-state persistence errors produce a generic server response."""
     class FailingProcessor:
-        def process(self, request_id, question):
+        def process(self, request_id, question, *, correlation_id=None):
             raise TimeoutError("provider token must not reach the client")
 
     class FailingFailureStore(SQLiteQuestionJobStore):

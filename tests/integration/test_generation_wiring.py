@@ -4,6 +4,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api import main
+from app.models import FakeLLMClient
+from app.services.question_answerer import QuestionAnswerer
 from app.services.processor_factory import UnknownGenerationProviderError
 
 
@@ -42,6 +44,54 @@ def test_local_provider_serves_placeholder_answers(configure_generation):
 
     assert response.status_code == 200
     assert response.json()["answer"] == "This is a placeholder answer for: What is RAG?"
+
+
+def test_fake_answerer_returns_and_persists_api_result(
+    configure_generation, monkeypatch
+):
+    """Verify the API returns a fake-generated answer and persists its job.
+
+    Args:
+        configure_generation: Fixture that configures generation settings and a
+            temporary SQLite job database.
+        monkeypatch: Pytest fixture used to replace the provider factory.
+    """
+    configure_generation("openai", "fake-model")
+    monkeypatch.setattr(
+        main,
+        "build_question_processor",
+        lambda provider, model, openai_api_key=None: QuestionAnswerer(
+            FakeLLMClient(model=model)
+        ),
+    )
+
+    with TestClient(main.app) as client:
+        response = client.post("/v1/questions", json={"question": "What is RAG?"})
+        assert response.status_code == 200
+        submitted = response.json()
+
+        request_id = submitted["request_id"]
+        polled = client.get(f"/v1/questions/{request_id}")
+
+    assert submitted == {
+        "request_id": request_id,
+        "answer": "Fake answer to: What is RAG?",
+        "citations": [],
+        "retrieval": {"documents_considered": 0, "chunks_returned": 0},
+        "model": {
+            "provider": "fake",
+            "name": "fake-model",
+            "input_tokens": 0,
+            "output_tokens": 0,
+        },
+    }
+    assert polled.status_code == 200
+    assert polled.json() == {
+        "request_id": request_id,
+        "status": "completed",
+        "result": submitted,
+        "error_category": None,
+    }
 
 
 def test_unknown_provider_fails_at_startup(configure_generation):

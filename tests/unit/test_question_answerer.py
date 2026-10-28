@@ -1,5 +1,7 @@
 """Unit tests for the LLM-backed question answerer."""
 
+import logging
+
 import pytest
 
 from app.models import FakeLLMClient, GenerationResult
@@ -70,6 +72,79 @@ def test_answerer_maps_generation_result_to_question_result():
         input_tokens=12,
         output_tokens=34,
     )
+
+
+def test_answerer_logs_generation_metadata_with_correlation_and_question_ids(caplog):
+    """Log provider metadata, usage, and both IDs after successful generation.
+
+    Args:
+        caplog: Pytest fixture used to capture structured log records.
+    """
+    caplog.set_level(logging.INFO, logger="app.services.question_answerer")
+    answerer = QuestionAnswerer(RecordingClient())
+
+    answerer.process(
+        "question-job-1",
+        "What is RAG?",
+        correlation_id="http-request-1",
+    )
+
+    record = next(
+        record
+        for record in caplog.records
+        if record.name == "app.services.question_answerer"
+        and record.message == "Generation completed"
+    )
+    assert record.request_id == "http-request-1"
+    assert record.question_id == "question-job-1"
+    assert record.provider == "test-provider"
+    assert record.model == "test-model"
+    assert record.elapsed_ms >= 0
+    assert record.input_tokens == 12
+    assert record.output_tokens == 34
+
+
+def test_answerer_logs_sanitized_failure_category_without_question(caplog):
+    """Log a safe categorized provider failure without exposing prompt text.
+
+    Args:
+        caplog: Pytest fixture used to capture structured log records.
+    """
+    class FailingClient:
+        """Raise a provider-style error containing sensitive request values."""
+
+        provider = "test-provider"
+        model = "test-model"
+
+        def generate(self, question: str) -> GenerationResult:
+            """Raise an error that echoes the prompt and a credential pattern."""
+            raise RuntimeError(f"Rejected question: {question}; password=secret")
+
+    caplog.set_level(logging.ERROR, logger="app.services.question_answerer")
+    answerer = QuestionAnswerer(FailingClient())
+
+    with pytest.raises(RuntimeError):
+        answerer.process(
+            "question-job-2",
+            "private prompt text",
+            correlation_id="http-request-2",
+        )
+
+    record = next(
+        record
+        for record in caplog.records
+        if record.name == "app.services.question_answerer"
+        and record.message.startswith("Generation failed:")
+    )
+    assert record.request_id == "http-request-2"
+    assert record.question_id == "question-job-2"
+    assert record.provider == "test-provider"
+    assert record.model == "test-model"
+    assert record.elapsed_ms >= 0
+    assert record.error_category == "provider_error"
+    assert record.exception_type == "RuntimeError"
+    assert "private prompt text" not in record.message
+    assert "secret" not in record.message
 
 
 def test_answerer_returns_empty_citations_and_zero_retrieval():

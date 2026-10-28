@@ -186,7 +186,13 @@ def test_workflow_passes_question_to_processor_and_persists_its_result(store_fac
         def __init__(self):
             self.call = None
 
-        def process(self, request_id: str, question: str) -> QuestionResult:
+        def process(
+            self,
+            request_id: str,
+            question: str,
+            *,
+            correlation_id: str | None = None,
+        ) -> QuestionResult:
             self.call = (request_id, question)
             return expected
 
@@ -207,7 +213,13 @@ def test_workflow_passes_question_to_processor_and_persists_its_result(store_fac
 def test_workflow_persists_failure_and_reraises_processor_exception(store_factory):
     """Verify processor failures are persisted and wrapped with their cause."""
     class FailingProcessor:
-        def process(self, request_id: str, question: str) -> QuestionResult:
+        def process(
+            self,
+            request_id: str,
+            question: str,
+            *,
+            correlation_id: str | None = None,
+        ) -> QuestionResult:
             raise TimeoutError("private provider endpoint and credential detail")
 
     store = store_factory(":memory:")
@@ -229,7 +241,13 @@ def test_workflow_persists_failure_and_reraises_processor_exception(store_factor
 def test_workflow_marks_mismatched_processor_result_as_failed(store_factory):
     """Verify a processor result for another job ID becomes a processing failure."""
     class MismatchedProcessor:
-        def process(self, request_id: str, question: str) -> QuestionResult:
+        def process(
+            self,
+            request_id: str,
+            question: str,
+            *,
+            correlation_id: str | None = None,
+        ) -> QuestionResult:
             return _result("different-request")
 
     store = store_factory(":memory:")

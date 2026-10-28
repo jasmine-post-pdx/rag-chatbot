@@ -23,11 +23,30 @@ class QuestionWorkflow:
         self._store = store
         self._processor = processor or PlaceholderQuestionProcessor()
 
-    def submit(self, request_id: str, question: str) -> QuestionResult:
-        """Create a job, process it, and persist either success or failure."""
+    def submit(
+        self,
+        request_id: str,
+        question: str,
+        *,
+        correlation_id: str | None = None,
+    ) -> QuestionResult:
+        """Create a job, process it, and persist either success or failure.
+
+        Args:
+            request_id: Identifier assigned to the question job.
+            question: User question to process.
+            correlation_id: Optional middleware request ID for log correlation.
+
+        Returns:
+            The generated and persisted question result.
+        """
         self._store.create_job(request_id)
         try:
-            result = self._processor.process(request_id, question)
+            result = self._processor.process(
+                request_id,
+                question,
+                correlation_id=correlation_id,
+            )
             if result.request_id != request_id:
                 raise ValueError(
                     f"Processor returned result for a different request: {result.request_id}"

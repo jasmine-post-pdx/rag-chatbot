@@ -1,6 +1,5 @@
 """Provider-neutral interfaces and models for text generation."""
 
-import os
 from typing import Protocol
 
 from pydantic import BaseModel, Field
@@ -56,6 +55,7 @@ class FakeLLMClient:
             model: Model identifier to report in generated results.
         """
         self.model = model
+        self.provider = "fake"
 
     def generate(self, question: str) -> GenerationResult:
         """Return a stable answer without making a provider request.
@@ -90,15 +90,19 @@ class OpenAIResponsesClient:
         _model: Model identifier passed to each request.
     """
 
-    def __init__(self, model: str, client=None) -> None:
+    def __init__(self, model: str, api_key: str | None = None, client=None) -> None:
         """Initialize the adapter with a model and optional SDK client.
 
         Args:
             model: OpenAI model identifier to use for requests.
+            api_key: Optional key from application settings.
             client: Optional OpenAI SDK client, useful for isolated tests.
         """
         self._client = client
         self._model = model
+        self._api_key = api_key
+        self.provider = "openai"
+        self.model = model
 
     def _get_client(self):
         """Return the SDK client, creating it on first use.
@@ -110,14 +114,18 @@ class OpenAIResponsesClient:
             MissingAPIKeyError: If ``OPENAI_API_KEY`` is not set.
         """
         if self._client is None:
-            if not os.environ.get("OPENAI_API_KEY"):
+            if not self._api_key:
                 raise MissingAPIKeyError(
                     "OPENAI_API_KEY is not set; it is required when "
                     "GENERATION_PROVIDER is 'openai'"
                 )
             from openai import OpenAI
 
-            self._client = OpenAI()
+            self._client = OpenAI(
+                api_key=self._api_key,
+                timeout=30.0,
+                max_retries=2,
+            )
         return self._client
 
     def generate(self, question: str) -> GenerationResult:

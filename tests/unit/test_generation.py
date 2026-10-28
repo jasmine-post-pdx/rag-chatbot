@@ -1,6 +1,7 @@
 """Unit tests for provider-neutral generation models and interfaces."""
 
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -136,3 +137,30 @@ def test_openai_client_maps_response_using_injected_sdk_client(monkeypatch):
         input_tokens=7,
         output_tokens=9,
     )
+
+
+def test_openai_client_configures_sdk_timeout_and_bounded_retries(monkeypatch):
+    """Configure the SDK with the chosen timeout and retry limit.
+
+    Args:
+        monkeypatch: Pytest fixture used to replace the OpenAI SDK constructor.
+    """
+    constructed_clients = []
+    responses = _FakeResponses()
+
+    def fake_openai(**kwargs):
+        """Capture SDK client options and provide a fake Responses endpoint."""
+        constructed_clients.append(kwargs)
+        return SimpleNamespace(responses=responses)
+
+    openai_module = ModuleType("openai")
+    openai_module.OpenAI = fake_openai
+    monkeypatch.setitem(sys.modules, "openai", openai_module)
+    client = OpenAIResponsesClient("gpt-test", api_key="test-key")
+
+    result = client.generate("What is RAG?")
+
+    assert result.answer == "An OpenAI answer"
+    assert constructed_clients == [
+        {"api_key": "test-key", "timeout": 30.0, "max_retries": 2}
+    ]
