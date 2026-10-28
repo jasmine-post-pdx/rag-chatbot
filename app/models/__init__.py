@@ -4,7 +4,14 @@ from app.models.generation import (
     FakeLLMClient,
     GenerationResult,
     LLMClient,
+    MissingAPIKeyError,
     OpenAIResponsesClient,
 )
 
-__all__ = ["FakeLLMClient", "GenerationResult", "LLMClient", "OpenAIResponsesClient"]
+__all__ = [
+    "FakeLLMClient",
+    "GenerationResult",
+    "LLMClient",
+    "MissingAPIKeyError",
+    "OpenAIResponsesClient",
+]

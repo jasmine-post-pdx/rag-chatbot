@@ -105,9 +105,12 @@ cp .env.example .env
 
 Key settings include the SQLite job-store path (`QUESTIONS_DB_PATH`), the
 Postgres/pgvector connection details, and the application log level
-(`LOG_LEVEL`, default `INFO`). The OpenAI adapter reads `OPENAI_API_KEY` through
-the official SDK's standard environment configuration. The API still uses its
-placeholder processor until generation is connected to the workflow.
+(`LOG_LEVEL`, default `INFO`). `GENERATION_PROVIDER` selects how questions are
+answered: `local` (the default) returns placeholder answers, and `openai` sends
+the question directly to `GENERATION_MODEL` through the Responses API, without
+retrieval. Any other value fails at startup. The OpenAI adapter reads
+`OPENAI_API_KEY` from the environment; the app starts without it, but each
+question fails, and logs that the key is missing, until it is set.
 
 Local runs load all of these settings from environment variables or `.env`.
 Docker Compose currently forwards the Postgres settings, sets
@@ -271,7 +274,9 @@ the SQLite store until the retrieval layer is wired up.
 
 ## Limitations And Troubleshooting
 
-- Answers are placeholders. Retrieval and generation are not implemented yet.
+- Answers are placeholders by default. With `GENERATION_PROVIDER=openai`, answers
+  come from the model directly; retrieval is not implemented yet, so there are
+  no citations.
 - Only the question-job endpoints are functional; there is no document ingestion
   or search endpoint.
 - `POST /v1/questions` is synchronous: it creates, completes, and returns the

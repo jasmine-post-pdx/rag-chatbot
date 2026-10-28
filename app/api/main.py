@@ -19,6 +19,7 @@ from app.core.logging import (
     log_validation_failure,
 )
 from app.models.questions import QuestionResult
+from app.services.processor_factory import build_question_processor
 from app.services.question_workflow import QuestionProcessingError, QuestionWorkflow
 from app.stores.sqlite_question_jobs import SQLiteQuestionJobStore
 
@@ -36,8 +37,12 @@ async def lifespan(app: FastAPI) -> None:
         Control is returned to the application while it runs.
     """
     configure_logging()
+    processor = build_question_processor(
+        settings.generation_provider, settings.generation_model
+    )
     app.state.question_workflow = QuestionWorkflow(
-        store=SQLiteQuestionJobStore(db_path=str(settings.questions_db_path))
+        store=SQLiteQuestionJobStore(db_path=str(settings.questions_db_path)),
+        processor=processor,
     )
     try:
         yield

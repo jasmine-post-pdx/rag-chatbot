@@ -1,5 +1,6 @@
 """Provider-neutral interfaces and models for text generation."""
 
+import os
 from typing import Protocol
 
 from pydantic import BaseModel, Field
@@ -74,11 +75,18 @@ class FakeLLMClient:
         )
 
 
+class MissingAPIKeyError(RuntimeError):
+    """A provider client was used without its required API key configured."""
+
+
 class OpenAIResponsesClient:
     """Generate text with OpenAI's official Python SDK and Responses API.
 
+    The SDK client is created on first use, so the application can start
+    without ``OPENAI_API_KEY`` and only fails when generation is attempted.
+
     Attributes:
-        _client: SDK client used to make Responses API requests.
+        _client: SDK client used to make Responses API requests, if created.
         _model: Model identifier passed to each request.
     """
 
@@ -89,12 +97,28 @@ class OpenAIResponsesClient:
             model: OpenAI model identifier to use for requests.
             client: Optional OpenAI SDK client, useful for isolated tests.
         """
-        if client is None:
-            from openai import OpenAI
-
-            client = OpenAI()
         self._client = client
         self._model = model
+
+    def _get_client(self):
+        """Return the SDK client, creating it on first use.
+
+        Returns:
+            The OpenAI SDK client.
+
+        Raises:
+            MissingAPIKeyError: If ``OPENAI_API_KEY`` is not set.
+        """
+        if self._client is None:
+            if not os.environ.get("OPENAI_API_KEY"):
+                raise MissingAPIKeyError(
+                    "OPENAI_API_KEY is not set; it is required when "
+                    "GENERATION_PROVIDER is 'openai'"
+                )
+            from openai import OpenAI
+
+            self._client = OpenAI()
+        return self._client
 
     def generate(self, question: str) -> GenerationResult:
         """Generate an answer and return provider-reported token usage.
@@ -104,8 +128,11 @@ class OpenAIResponsesClient:
 
         Returns:
             Generated text, the model identifier, and reported token usage.
+
+        Raises:
+            MissingAPIKeyError: If ``OPENAI_API_KEY`` is not set.
         """
-        response = self._client.responses.create(model=self._model, input=question)
+        response = self._get_client().responses.create(model=self._model, input=question)
         usage = response.usage
         return GenerationResult(
             answer=response.output_text,
