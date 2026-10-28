@@ -38,8 +38,8 @@ application structure so each part of the pipeline can evolve independently:
   survive restarts and can be retrieved through the status endpoint.
 - `app/retrieval/` will own chunking, indexing, search, ranking, and context
   assembly once the retrieval adapters are added.
-- `app/models/` holds question-domain DTOs and will hold LLM and embedding
-  adapters when real generation is wired up.
+- `app/models/` holds question-domain DTOs and provider-neutral generation
+  interfaces, including the OpenAI Responses adapter and a deterministic fake.
 - `app/tools/` is reserved for optional callable tools the generator can use.
 - `tests/unit/`, `tests/integration/`, and `tests/evals/` mirror these
   responsibilities and hold the corresponding automated tests.
@@ -105,8 +105,9 @@ cp .env.example .env
 
 Key settings include the SQLite job-store path (`QUESTIONS_DB_PATH`), the
 Postgres/pgvector connection details, and the application log level
-(`LOG_LEVEL`, default `INFO`). All settings have local-development defaults, so
-the API runs without a `.env` file.
+(`LOG_LEVEL`, default `INFO`). The OpenAI adapter reads `OPENAI_API_KEY` through
+the official SDK's standard environment configuration. The API still uses its
+placeholder processor until generation is connected to the workflow.
 
 Local runs load all of these settings from environment variables or `.env`.
 Docker Compose currently forwards the Postgres settings, sets
