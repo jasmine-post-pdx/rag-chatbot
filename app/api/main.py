@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from typing import Annotated
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, StringConstraints
@@ -20,7 +20,12 @@ from app.core.logging import (
 )
 from app.models.questions import QuestionResult
 from app.services.processor_factory import build_question_processor
-from app.services.question_workflow import QuestionProcessingError, QuestionWorkflow
+from app.services.question_workflow import (
+    QuestionProcessingError,
+    QuestionStatePersistenceError,
+    QuestionWorkflow,
+)
+from app.stores.question_jobs import IdempotencyKeyReuseError
 from app.stores.sqlite_question_jobs import SQLiteQuestionJobStore
 
 logger = logging.getLogger(__name__)
@@ -44,14 +49,16 @@ async def lifespan(app: FastAPI) -> None:
         if settings.openai_api_key is not None
         else None,
     )
-    app.state.question_workflow = QuestionWorkflow(
-        store=SQLiteQuestionJobStore(db_path=str(settings.questions_db_path)),
-        processor=processor,
-    )
+    store = SQLiteQuestionJobStore(db_path=str(settings.questions_db_path))
     try:
+        store.verify_integrity()
+        app.state.question_workflow = QuestionWorkflow(
+            store=store,
+            processor=processor,
+        )
         yield
     finally:
-        app.state.question_workflow.close()
+        store.close()
         app.state.question_workflow = None
 
 
@@ -146,7 +153,17 @@ async def internal_error_handler(request: Request, exc: Exception) -> JSONRespon
                 "request_id": request.state.request_id,
                 "question_id": exc.request_id,
                 "error_category": "processing_error",
-                "exception_type": type(exc.__cause__).__name__ if exc.__cause__ else "Exception",
+                "exception_type": exc.exception_type,
+            },
+        )
+    elif isinstance(exc, QuestionStatePersistenceError):
+        logger.error(
+            "Question failure state persistence failed",
+            extra={
+                "request_id": request.state.request_id,
+                "question_id": exc.request_id,
+                "error_category": "server",
+                "exception_type": exc.exception_type,
             },
         )
     else:
@@ -216,11 +233,20 @@ def ready(
 @app.post(
     "/v1/questions",
     response_model=QuestionResult,
+    responses={
+        status.HTTP_409_CONFLICT: {
+            "description": "Idempotency-Key was reused with a different question"
+        }
+    },
 )
 def submit_question(
     request: QuestionRequest,
     http_request: Request,
     question_workflow: QuestionWorkflow = Depends(get_question_workflow),  # noqa: B008
+    idempotency_key: Annotated[
+        str | None,
+        Header(alias="Idempotency-Key", min_length=1, max_length=255),
+    ] = None,
 ) -> QuestionResult:
     """Process a question and return its answer and metadata.
 
@@ -228,16 +254,32 @@ def submit_question(
         request: The question payload from the client.
         http_request: The HTTP request containing the middleware correlation ID.
         question_workflow: The workflow used to process and persist the job.
+        idempotency_key: Optional client key for reusing a prior terminal result.
 
     Returns:
         The answer and its retrieval and model metadata.
     """
+    if idempotency_key is not None:
+        idempotency_key = idempotency_key.strip()
+        if not idempotency_key:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="Idempotency-Key must not be blank",
+            )
+
     request_id = str(uuid4())
-    return question_workflow.submit(
-        request_id,
-        request.question,
-        correlation_id=http_request.state.request_id,
-    )
+    try:
+        return question_workflow.submit(
+            request_id,
+            request.question,
+            correlation_id=http_request.state.request_id,
+            idempotency_key=idempotency_key,
+        )
+    except IdempotencyKeyReuseError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Idempotency-Key was already used for a different question",
+        ) from None
 
 
 @app.get("/v1/questions/{request_id}", response_model=QuestionJobResponse)

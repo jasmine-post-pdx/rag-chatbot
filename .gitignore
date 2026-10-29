@@ -67,6 +67,8 @@ instance/
 
 # SQLite question job store
 data/questions.db
+data/question_archives/
+data/question_backups/
 
 # Scrapy stuff:
 .scrapy

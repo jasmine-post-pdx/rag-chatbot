@@ -318,13 +318,10 @@ def test_submit_failure_state_persistence_error_returns_generic_500(client, stor
     class FailingFailureStore(SQLiteQuestionJobStore):
         def __init__(self):
             super().__init__()
-            self.created_request_id = None
+            self.failed_request_id = None
 
-        def create_job(self, request_id):
-            self.created_request_id = request_id
-            return super().create_job(request_id)
-
-        def fail_job(self, request_id, error_category):
+        def create_failed_job(self, request_id, error_category, **kwargs):
+            self.failed_request_id = request_id
             raise RuntimeError("database connection detail must not reach the client")
 
     store = store_factory(store_type=FailingFailureStore)
@@ -337,9 +334,8 @@ def test_submit_failure_state_persistence_error_returns_generic_500(client, stor
     assert response.json() == {"detail": "Internal server error"}
     assert "provider token" not in response.text
     assert "database connection detail" not in response.text
-    pending = store.get_job(store.created_request_id)
-    assert pending is not None
-    assert pending.status == "pending"
+    assert "x-question-id" not in response.headers
+    assert store.get_job(store.failed_request_id) is None
 
 
 def test_submit_sqlite_failure_returns_generic_500(client, question_store):

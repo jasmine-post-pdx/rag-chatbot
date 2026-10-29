@@ -103,10 +103,12 @@ file. Copy `.env.example` to `.env` and edit the values you need:
 cp .env.example .env
 ```
 
-Key settings include the SQLite job-store path (`QUESTIONS_DB_PATH`), the
-Postgres/pgvector connection details, and the application log level
-(`LOG_LEVEL`, default `INFO`). `GENERATION_PROVIDER` selects how questions are
-answered: `local` (the default) returns placeholder answers, and `openai` sends
+Key settings include the SQLite job-store path (`QUESTIONS_DB_PATH`), archive
+and backup directories (`QUESTIONS_ARCHIVE_DIR`, `QUESTIONS_BACKUP_DIR`), live
+and archive retention in days, the Postgres/pgvector connection details, and the
+application log level (`LOG_LEVEL`, default `INFO`). `GENERATION_PROVIDER`
+selects how questions are answered: `local` (the default) returns placeholder
+answers, and `openai` sends
 the question directly to `GENERATION_MODEL` through the Responses API, without
 retrieval. Any other value fails at startup. `OPENAI_API_KEY` is loaded through
 Pydantic Settings from the environment or `.env` file, stored as a secret
@@ -220,6 +222,77 @@ Retrieve the stored job:
 curl http://localhost:8000/v1/questions/<request_id>
 ```
 
+Clients can send an optional `Idempotency-Key` header to reuse a saved terminal
+result after retrying the same question. Reusing a key with different question
+text returns `409 Conflict`. The API does not persist an in-flight key claim, so
+simultaneous requests with the same new key can both call the provider before
+one terminal result is saved.
+
+### Job retention, archives, and backups
+
+The default policy keeps terminal jobs in the live database for 30 days. Their
+idempotency keys are valid for at least that long; because archival runs daily,
+a key can remain valid for up to one extra day. Jobs older than the live window
+move into monthly SQLite archives for another 365 days, then expire. Archived
+jobs are kept for recovery and are not returned by the normal status endpoint.
+That is about 13 months in the live database and archives. Existing rows get a
+`created_at` timestamp on the first upgraded app startup, so their retention
+period starts at that migration time.
+
+Run the maintenance commands from the repository root:
+
+```bash
+uv run python -m scripts.question_job_maintenance backup-live
+uv run python -m scripts.question_job_maintenance archive --dry-run
+uv run python -m scripts.question_job_maintenance archive
+uv run python -m scripts.question_job_maintenance backup-archives
+uv run python -m scripts.question_job_maintenance restore-check
+```
+
+`archive` first makes a live database snapshot, then copies and verifies old
+terminal rows before deleting them from the live database. It is safe to rerun
+after interruption. `--vacuum-live` can return freed live-database pages to the
+operating system, but may take time and block database activity. Without it,
+SQLite reuses those pages for later jobs. A dry run reports old nonterminal
+records left in the live database for review; the current workflow creates only
+terminal records.
+
+Schedule `backup-live` hourly and `archive`, followed by `backup-archives`, once
+a day. Backup snapshots use SQLite's backup API and retain all hourly snapshots
+for 24 hours, daily snapshots for 30 days, weekly snapshots for 12 weeks, and
+monthly snapshots for 365 days. `backup-archives` captures monthly archive
+databases after the daily archival run. For a local app, a practical schedule
+is:
+
+```cron
+0 * * * * cd /path/to/rag-chatbot && uv run python -m scripts.question_job_maintenance backup-live
+15 2 * * * cd /path/to/rag-chatbot && uv run python -m scripts.question_job_maintenance archive
+30 2 * * * cd /path/to/rag-chatbot && uv run python -m scripts.question_job_maintenance backup-archives
+```
+
+When the app runs in Compose, run maintenance in a one-off app container so it
+uses the same SQLite volume as the server. Use these commands in place of the
+`uv run` commands above:
+
+```bash
+docker compose run --rm --no-deps app python -m scripts.question_job_maintenance backup-live
+docker compose run --rm --no-deps app python -m scripts.question_job_maintenance archive
+docker compose run --rm --no-deps app python -m scripts.question_job_maintenance backup-archives
+```
+
+By default, archives and backups live under `data/` alongside the live database.
+For recovery from disk or host loss, set `QUESTIONS_BACKUP_DIR` to encrypted,
+off-host storage. In Compose, mount that same path into the app container so the
+server and maintenance command can read and write it. Backup snapshots can
+contain records that have since expired from the live database or archives until
+those snapshots age out. An archived row near the end of its 395-day live plus
+archive window can remain in an archive backup for nearly another year, or
+about 25 months total. `restore-check` restores the newest live snapshot to a
+temporary database, runs `quick_check`, and verifies the job table. Run it
+periodically; also perform a full service recovery drill by restoring the live
+and archive snapshots while the application is stopped, then run `archive`
+before reopening traffic so expired idempotency keys are removed.
+
 ### Request logging
 
 Every request is logged with a correlation ID, HTTP method, route, response
@@ -288,8 +361,10 @@ the SQLite store until the retrieval layer is wired up.
   no citations.
 - Only the question-job endpoints are functional; there is no document ingestion
   or search endpoint.
-- `POST /v1/questions` is synchronous: it creates, completes, and returns the
-  job in one request. Real RAG work will likely be asynchronous.
+- `POST /v1/questions` is synchronous: it processes the question, persists the
+  completed or failed job, and returns in one request. In-flight work is not
+  persisted; the status endpoint retrieves terminal job records after submission
+  finishes. Real RAG work will likely be asynchronous.
 - The SQLite database path defaults to `data/questions.db` and can be changed
   with the `QUESTIONS_DB_PATH` environment variable or in a `.env` file.
 - Postgres is optional and is not required to run the current API. Start it with

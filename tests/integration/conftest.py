@@ -1,10 +1,38 @@
 """Shared fixtures for integration tests."""
 
+import os
+
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api import main
-from app.services.question_workflow import QuestionWorkflow
+# The app settings object is created at import time and reads `.env`. Keep tests
+# isolated from developer settings; preserve a real key only for the explicitly
+# opted-in provider smoke test.
+test_environment = {
+    "GENERATION_PROVIDER": "local",
+    "GENERATION_MODEL": "stub",
+    "QUESTIONS_DB_PATH": ":memory:",
+    "LOG_LEVEL": "INFO",
+}
+if os.getenv("RUN_OPENAI_SMOKE") != "1":
+    test_environment["OPENAI_API_KEY"] = "test-only-placeholder"
+os.environ.update(test_environment)
+
+from app.api import main  # noqa: E402
+from app.services.question_workflow import QuestionWorkflow  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def isolate_lifespan_settings(monkeypatch, tmp_path):
+    """Keep the app lifespan on test-local database and provider settings."""
+    monkeypatch.setattr(
+        main.settings,
+        "questions_db_path",
+        str(tmp_path / "lifespan.sqlite3"),
+    )
+    monkeypatch.setattr(main.settings, "generation_provider", "local")
+    monkeypatch.setattr(main.settings, "generation_model", "stub")
+    monkeypatch.setattr(main.settings, "openai_api_key", None)
 
 
 @pytest.fixture

@@ -210,8 +210,8 @@ def test_workflow_passes_question_to_processor_and_persists_its_result(store_fac
     assert job.result == expected
 
 
-def test_workflow_persists_failure_and_reraises_processor_exception(store_factory):
-    """Verify processor failures are persisted and wrapped with their cause."""
+def test_workflow_persists_failure_without_preserving_processor_exception(store_factory):
+    """Persist a failed job and expose only safe processor exception metadata."""
     class FailingProcessor:
         def process(
             self,
@@ -228,8 +228,9 @@ def test_workflow_persists_failure_and_reraises_processor_exception(store_factor
     with pytest.raises(QuestionProcessingError) as error:
         workflow.submit("req-1", "What is RAG?")
 
-    assert isinstance(error.value.__cause__, TimeoutError)
-    assert "private provider endpoint" in str(error.value.__cause__)
+    assert error.value.exception_type == "TimeoutError"
+    assert error.value.__cause__ is None
+    assert error.value.__context__ is None
 
     job = store.get_job("req-1")
     assert job is not None
@@ -256,7 +257,9 @@ def test_workflow_marks_mismatched_processor_result_as_failed(store_factory):
     with pytest.raises(QuestionProcessingError) as error:
         workflow.submit("req-1", "What is RAG?")
 
-    assert isinstance(error.value.__cause__, ValueError)
+    assert error.value.exception_type == "ValueError"
+    assert error.value.__cause__ is None
+    assert error.value.__context__ is None
     job = store.get_job("req-1")
     assert job is not None
     assert job.status == "failed"

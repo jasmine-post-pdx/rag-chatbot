@@ -13,6 +13,7 @@ RUN pip install --no-cache-dir uv==0.12.23 \
 
 COPY --chown=app:app pyproject.toml uv.lock README.md ./
 COPY --chown=app:app app ./app
+COPY --chown=app:app scripts ./scripts
 
 # Development/CI stage with test dependencies and test suite.
 FROM base AS dev

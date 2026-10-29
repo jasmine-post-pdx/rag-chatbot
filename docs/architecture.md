@@ -22,16 +22,20 @@ client
 | `app/services/question_workflow.py` | Coordinates job creation, answer processing, and success or failure persistence. |
 | `app/services/question_processor.py` | Processor interface and the current placeholder answer implementation. |
 | `app/stores/` | Job-store interface and SQLite-backed implementation. |
+| `scripts/question_job_maintenance.py` | SQLite snapshots, tiered backup rotation, and terminal-job archiving. |
 | `app/models/questions.py` | Internal job and answer DTOs shared by processing, storage, and API layers. |
 | `app/api/schemas.py` | Public response model for job status, including safe processing failure categories. |
 | `app/retrieval/`, `app/tools/` | Package placeholders; no retrieval or tool behavior is implemented yet. |
 
 The workflow and SQLite store are initialized during the FastAPI application
 lifespan and shared with routes through dependency injection. Question
-submission creates, processes, and returns a job in one request. Processing
-failures are persisted as failed jobs with a safe error category; the submit
-request still returns a generic server error. SQLite stores the job;
+submission processes the question, then persists and returns its terminal job
+in one request; in-flight work is not stored. Processing failures are persisted
+as failed jobs with a safe error category; the submit request still returns a
+generic server error. SQLite stores the job;
 the optional Compose pgvector service is not connected to the application.
+The maintenance command keeps 30 days of jobs live, archives older terminal
+jobs, and expires archived rows after the configured archive period.
 
 The `data/raw/`, `data/processed/`, and `scripts/` directories are reserved for
 future ingestion work and currently contain no pipeline implementation.
