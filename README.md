@@ -23,7 +23,7 @@ The project began as a single FastAPI endpoint that accepted a question and
 returned a placeholder answer. I reorganized that into a more conventional
 application structure so each part of the pipeline can evolve independently:
 
-- `app/api/main.py` is the HTTP entry point. It wires the question service
+- `app/api/main.py` is the HTTP entry point. It wires the question workflow
   through FastAPI dependency injection and maps errors to clean HTTP responses.
 - `app/api/schemas.py` currently holds the public polling response schema.
   Other request and response models still live in the API and service modules;
@@ -31,24 +31,23 @@ application structure so each part of the pipeline can evolve independently:
 - `app/core/config.py` centralizes settings loaded from environment variables
   and an optional `.env` file. It keeps environment-specific values out of the
   source code.
-- `app/services/questions.py` currently implements both the question-job
-  lifecycle and SQLite persistence. Completed jobs survive restarts and can be
-  retrieved through the status endpoint. A future storage abstraction could
-  separate orchestration from SQLite and support other job stores.
+- `app/services/question_workflow.py` coordinates job creation, answer
+  processing, and persistence. The processor interface and placeholder live in
+  `app/services/question_processor.py`; the `QuestionJobStore` interface and
+  SQLite implementation live under `app/stores/`. Completed and failed jobs
+  survive restarts and can be retrieved through the status endpoint.
 - `app/retrieval/` will own chunking, indexing, search, ranking, and context
   assembly once the retrieval adapters are added.
-- `app/models/` will hold LLM and embedding adapters when real generation is
-  wired up.
+- `app/models/` holds question-domain DTOs and provider-neutral generation
+  interfaces, including the OpenAI Responses adapter and a deterministic fake.
 - `app/tools/` is reserved for optional callable tools the generator can use.
 - `tests/unit/`, `tests/integration/`, and `tests/evals/` mirror these
   responsibilities and hold the corresponding automated tests.
 
-This structure establishes boundaries that will be strengthened as the RAG
-pipeline develops. API handlers are kept thin, while the current question
-service handles both job orchestration and SQLite persistence. Retrieval,
-model, and tool packages are placeholders for future adapters. Public API
-schemas are partially separated from internal models, with further separation
-planned as the contract grows.
+This structure keeps API handlers thin and separates workflow, answer
+processing, and job persistence. Retrieval, model, and tool packages remain
+future adapters. Processing failures are stored as failed jobs with the safe
+`processing_error` category; submission still returns a generic HTTP 500.
 
 ## What I'm learning here
 
@@ -104,10 +103,25 @@ file. Copy `.env.example` to `.env` and edit the values you need:
 cp .env.example .env
 ```
 
-Key settings include the SQLite job-store path (`QUESTIONS_DB_PATH`), the
-Postgres/pgvector connection details, and the application log level
-(`LOG_LEVEL`, default `INFO`). All settings have local-development defaults, so
-the API runs without a `.env` file.
+Key settings include the SQLite job-store path (`QUESTIONS_DB_PATH`), archive
+and backup directories (`QUESTIONS_ARCHIVE_DIR`, `QUESTIONS_BACKUP_DIR`), live
+and archive retention in days, the Postgres/pgvector connection details, and the
+application log level (`LOG_LEVEL`, default `INFO`). `GENERATION_PROVIDER`
+selects how questions are answered: `local` (the default) returns placeholder
+answers, and `openai` sends
+the question directly to `GENERATION_MODEL` through the Responses API, without
+retrieval. Any other value fails at startup. `OPENAI_API_KEY` is loaded through
+Pydantic Settings from the environment or `.env` file, stored as a secret
+setting, and has no credential default. If supplied but empty or whitespace-only,
+settings validation fails during startup. The app can start without the
+variable, but an OpenAI-backed question fails until a key is configured. Add
+this to `.env` when using `GENERATION_PROVIDER=openai`:
+
+```dotenv
+OPENAI_API_KEY=your-key-here
+```
+
+Do not commit real credentials to the repository.
 
 Local runs load all of these settings from environment variables or `.env`.
 Docker Compose currently forwards the Postgres settings, sets
@@ -208,6 +222,77 @@ Retrieve the stored job:
 curl http://localhost:8000/v1/questions/<request_id>
 ```
 
+Clients can send an optional `Idempotency-Key` header to reuse a saved terminal
+result after retrying the same question. Reusing a key with different question
+text returns `409 Conflict`. The API does not persist an in-flight key claim, so
+simultaneous requests with the same new key can both call the provider before
+one terminal result is saved.
+
+### Job retention, archives, and backups
+
+The default policy keeps terminal jobs in the live database for 30 days. Their
+idempotency keys are valid for at least that long; because archival runs daily,
+a key can remain valid for up to one extra day. Jobs older than the live window
+move into monthly SQLite archives for another 365 days, then expire. Archived
+jobs are kept for recovery and are not returned by the normal status endpoint.
+That is about 13 months in the live database and archives. Existing rows get a
+`created_at` timestamp on the first upgraded app startup, so their retention
+period starts at that migration time.
+
+Run the maintenance commands from the repository root:
+
+```bash
+uv run python -m scripts.question_job_maintenance backup-live
+uv run python -m scripts.question_job_maintenance archive --dry-run
+uv run python -m scripts.question_job_maintenance archive
+uv run python -m scripts.question_job_maintenance backup-archives
+uv run python -m scripts.question_job_maintenance restore-check
+```
+
+`archive` first makes a live database snapshot, then copies and verifies old
+terminal rows before deleting them from the live database. It is safe to rerun
+after interruption. `--vacuum-live` can return freed live-database pages to the
+operating system, but may take time and block database activity. Without it,
+SQLite reuses those pages for later jobs. A dry run reports old nonterminal
+records left in the live database for review; the current workflow creates only
+terminal records.
+
+Schedule `backup-live` hourly and `archive`, followed by `backup-archives`, once
+a day. Backup snapshots use SQLite's backup API and retain all hourly snapshots
+for 24 hours, daily snapshots for 30 days, weekly snapshots for 12 weeks, and
+monthly snapshots for 365 days. `backup-archives` captures monthly archive
+databases after the daily archival run. For a local app, a practical schedule
+is:
+
+```cron
+0 * * * * cd /path/to/rag-chatbot && uv run python -m scripts.question_job_maintenance backup-live
+15 2 * * * cd /path/to/rag-chatbot && uv run python -m scripts.question_job_maintenance archive
+30 2 * * * cd /path/to/rag-chatbot && uv run python -m scripts.question_job_maintenance backup-archives
+```
+
+When the app runs in Compose, run maintenance in a one-off app container so it
+uses the same SQLite volume as the server. Use these commands in place of the
+`uv run` commands above:
+
+```bash
+docker compose run --rm --no-deps app python -m scripts.question_job_maintenance backup-live
+docker compose run --rm --no-deps app python -m scripts.question_job_maintenance archive
+docker compose run --rm --no-deps app python -m scripts.question_job_maintenance backup-archives
+```
+
+By default, archives and backups live under `data/` alongside the live database.
+For recovery from disk or host loss, set `QUESTIONS_BACKUP_DIR` to encrypted,
+off-host storage. In Compose, mount that same path into the app container so the
+server and maintenance command can read and write it. Backup snapshots can
+contain records that have since expired from the live database or archives until
+those snapshots age out. An archived row near the end of its 395-day live plus
+archive window can remain in an archive backup for nearly another year, or
+about 25 months total. `restore-check` restores the newest live snapshot to a
+temporary database, runs `quick_check`, and verifies the job table. Run it
+periodically; also perform a full service recovery drill by restoring the live
+and archive snapshots while the application is stopped, then run `archive`
+before reopening traffic so expired idempotency keys are removed.
+
 ### Request logging
 
 Every request is logged with a correlation ID, HTTP method, route, response
@@ -235,13 +320,19 @@ INFO:     Request completed request_id=<uuid> method=POST route=/v1/questions st
 INFO:     Request completed request_id=<uuid> method=POST route=/v1/questions status=500 elapsed_ms=5.7 error_category=server
 ```
 
-Request logging does not intentionally include request bodies, answers,
-credentials, or settings objects. Correlation and request metadata are emitted
-as structured key/value fields using the standard library. Exception handlers
-can include exception messages in log messages, but the configured stdout
-formatter does not render traceback text from exception records. Sanitize
-provider exception messages before logging them when external services are
-integrated.
+If question processing fails after the job is saved, the generic `500` response
+also includes an `x-question-id` header. Use that ID to poll
+`GET /v1/questions/{request_id}`; the job response reports `status: "failed"`
+and `error_category: "processing_error"` without exposing provider exception
+details.
+
+The middleware owns one request summary; API exception handlers own handled
+error records. Error records include the request ID, category, exception type,
+and a bounded one-line summary. Common credential patterns are redacted, and
+tracebacks are not written to stdout. This redaction is best-effort: provider
+adapters should avoid putting prompts, personal data, or secrets in exception
+messages. Invalid or oversized client-supplied `x-request-id` values are
+replaced with a generated ID before they are logged or returned.
 
 ### Local Postgres with pgvector
 
@@ -265,11 +356,15 @@ the SQLite store until the retrieval layer is wired up.
 
 ## Limitations And Troubleshooting
 
-- Answers are placeholders. Retrieval and generation are not implemented yet.
+- Answers are placeholders by default. With `GENERATION_PROVIDER=openai`, answers
+  come from the model directly; retrieval is not implemented yet, so there are
+  no citations.
 - Only the question-job endpoints are functional; there is no document ingestion
   or search endpoint.
-- `POST /v1/questions` is synchronous: it creates, completes, and returns the
-  job in one request. Real RAG work will likely be asynchronous.
+- `POST /v1/questions` is synchronous: it processes the question, persists the
+  completed or failed job, and returns in one request. In-flight work is not
+  persisted; the status endpoint retrieves terminal job records after submission
+  finishes. Real RAG work will likely be asynchronous.
 - The SQLite database path defaults to `data/questions.db` and can be changed
   with the `QUESTIONS_DB_PATH` environment variable or in a `.env` file.
 - Postgres is optional and is not required to run the current API. Start it with
@@ -283,6 +378,16 @@ Run the automated tests from the project root:
 ```bash
 pytest
 ```
+
+The real OpenAI Responses API smoke test is skipped by default. To opt in,
+configure `OPENAI_API_KEY` and `OPENAI_SMOKE_MODEL` in the environment or
+`.env`, then run:
+
+```bash
+RUN_OPENAI_SMOKE=1 pytest -m openai_smoke
+```
+
+The smoke test makes a real provider request and may incur API usage charges.
 
 Run the tests inside the Docker `dev` target:
 
@@ -356,7 +461,7 @@ projects.
 - [ ] Add real document ingestion (load, chunk, embed) under `app/retrieval/`.
 - [ ] Add a local or API-based embedding model adapter under `app/models/`.
 - [ ] Add a generation adapter that builds prompts from retrieved context.
-- [ ] Replace the placeholder answer in `complete_job` with a real RAG chain.
+- [ ] Replace the placeholder processor with retrieval-grounded generation.
 - [ ] Store chunks and embeddings in the Postgres/pgvector container.
 - [ ] Add retrieval-quality evaluations under `tests/evals/`.
 - [x] Move database path and model settings into configuration or environment

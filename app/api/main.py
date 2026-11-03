@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from typing import Annotated
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, StringConstraints
@@ -13,11 +13,20 @@ from pydantic import BaseModel, StringConstraints
 from app.api.middleware import REQUEST_ID_HEADER, RequestLogMiddleware
 from app.api.schemas import QuestionJobResponse
 from app.core.config import settings
-from app.core.logging import configure_logging
-from app.services.questions import (
-    QuestionResult,
-    QuestionService,
+from app.core.logging import (
+    configure_logging,
+    log_exception_summary,
+    log_validation_failure,
 )
+from app.models.questions import QuestionResult
+from app.services.processor_factory import build_question_processor
+from app.services.question_workflow import (
+    QuestionProcessingError,
+    QuestionStatePersistenceError,
+    QuestionWorkflow,
+)
+from app.stores.question_jobs import IdempotencyKeyReuseError
+from app.stores.sqlite_question_jobs import SQLiteQuestionJobStore
 
 logger = logging.getLogger(__name__)
 
@@ -33,12 +42,24 @@ async def lifespan(app: FastAPI) -> None:
         Control is returned to the application while it runs.
     """
     configure_logging()
-    app.state.question_service = QuestionService(db_path=settings.questions_db_path)
+    processor = build_question_processor(
+        settings.generation_provider,
+        settings.generation_model,
+        settings.openai_api_key.get_secret_value()
+        if settings.openai_api_key is not None
+        else None,
+    )
+    store = SQLiteQuestionJobStore(db_path=str(settings.questions_db_path))
     try:
+        store.verify_integrity()
+        app.state.question_workflow = QuestionWorkflow(
+            store=store,
+            processor=processor,
+        )
         yield
     finally:
-        app.state.question_service.close()
-        app.state.question_service = None
+        store.close()
+        app.state.question_workflow = None
 
 
 class ValidationErrorResponse(BaseModel):
@@ -72,8 +93,8 @@ app = FastAPI(
 app.add_middleware(RequestLogMiddleware)
 
 
-def get_question_service(request: Request) -> QuestionService:
-    """Return the shared question service instance from application state.
+def get_question_workflow(request: Request) -> QuestionWorkflow:
+    """Return the shared question workflow from application state.
 
     Args:
         request: The current HTTP request.
@@ -81,7 +102,7 @@ def get_question_service(request: Request) -> QuestionService:
     Returns:
         The configured question service.
     """
-    return request.app.state.question_service
+    return request.app.state.question_workflow
 
 
 @app.exception_handler(RequestValidationError)
@@ -104,7 +125,7 @@ async def request_validation_error_handler(
         message = error.get("msg", "Invalid value")
         issues.append(f"{location}: {message}" if location else message)
     detail = "Invalid request: " + "; ".join(issues)
-    logger.warning("Validation error: %s", detail)
+    log_validation_failure(logger, request.state.request_id)
     response = JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         content=ValidationErrorResponse(detail=detail).model_dump(),
@@ -125,12 +146,41 @@ async def internal_error_handler(request: Request, exc: Exception) -> JSONRespon
         A JSON response with a generic internal server error detail.
     """
     request.state.error_category = "server"
-    logger.exception("Unhandled exception: %s", exc)
+    if isinstance(exc, QuestionProcessingError):
+        logger.error(
+            "Question processing failed",
+            extra={
+                "request_id": request.state.request_id,
+                "question_id": exc.request_id,
+                "error_category": "processing_error",
+                "exception_type": exc.exception_type,
+            },
+        )
+    elif isinstance(exc, QuestionStatePersistenceError):
+        logger.error(
+            "Question failure state persistence failed",
+            extra={
+                "request_id": request.state.request_id,
+                "question_id": exc.request_id,
+                "error_category": "server",
+                "exception_type": exc.exception_type,
+            },
+        )
+    else:
+        log_exception_summary(
+            logger,
+            exc,
+            message="Unhandled exception",
+            request_id=request.state.request_id,
+            error_category="server",
+        )
     response = JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content=ServerErrorResponse(detail="Internal server error").model_dump(),
     )
     response.headers[REQUEST_ID_HEADER] = request.state.request_id
+    if isinstance(exc, QuestionProcessingError):
+        response.headers["x-question-id"] = exc.request_id
     return response
 
 
@@ -159,12 +209,12 @@ def health() -> dict[str, str]:
 
 @app.get("/ready")
 def ready(
-    question_service: QuestionService = Depends(get_question_service),  # noqa: B008
+    question_workflow: QuestionWorkflow = Depends(get_question_workflow),  # noqa: B008
 ) -> dict[str, str]:
     """Report whether the API and its SQLite backing store are ready.
 
     Args:
-        question_service: The service used to check the backing store.
+        question_workflow: The workflow that checks its backing store.
 
     Returns:
         A status message indicating the API is ready.
@@ -172,7 +222,7 @@ def ready(
     Raises:
         HTTPException: If the backing store is not usable.
     """
-    if not question_service.is_ready():
+    if not question_workflow.is_ready():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Service unavailable",
@@ -183,54 +233,78 @@ def ready(
 @app.post(
     "/v1/questions",
     response_model=QuestionResult,
+    responses={
+        status.HTTP_409_CONFLICT: {
+            "description": "Idempotency-Key was reused with a different question"
+        }
+    },
 )
 def submit_question(
     request: QuestionRequest,
-    question_service: QuestionService = Depends(get_question_service),  # noqa: B008
+    http_request: Request,
+    question_workflow: QuestionWorkflow = Depends(get_question_workflow),  # noqa: B008
+    idempotency_key: Annotated[
+        str | None,
+        Header(alias="Idempotency-Key", min_length=1, max_length=255),
+    ] = None,
 ) -> QuestionResult:
     """Process a question and return its answer and metadata.
 
     Args:
         request: The question payload from the client.
-        question_service: The service used to create and complete the job.
+        http_request: The HTTP request containing the middleware correlation ID.
+        question_workflow: The workflow used to process and persist the job.
+        idempotency_key: Optional client key for reusing a prior terminal result.
 
     Returns:
         The answer and its retrieval and model metadata.
     """
+    if idempotency_key is not None:
+        idempotency_key = idempotency_key.strip()
+        if not idempotency_key:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="Idempotency-Key must not be blank",
+            )
+
     request_id = str(uuid4())
-    question_service.create_job(request_id)
-    question_service.complete_job(request_id, request.question)
-    job = question_service.get_job(request_id)
-    if job is None or job.result is None:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+    try:
+        return question_workflow.submit(
+            request_id,
+            request.question,
+            correlation_id=http_request.state.request_id,
+            idempotency_key=idempotency_key,
         )
-    return job.result
+    except IdempotencyKeyReuseError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Idempotency-Key was already used for a different question",
+        ) from None
 
 
 @app.get("/v1/questions/{request_id}", response_model=QuestionJobResponse)
 def question_status(
     request_id: str,
-    question_service: QuestionService = Depends(get_question_service),  # noqa: B008
+    question_workflow: QuestionWorkflow = Depends(get_question_workflow),  # noqa: B008
 ) -> QuestionJobResponse:
     """Return the current state of a question job.
 
     Args:
         request_id: Unique identifier of the requested job.
-        question_service: The service used to look up the job.
+        question_workflow: The workflow used to look up the job.
 
     Returns:
-        The current job state and its result when complete.
+        The current job state, its result on success, or a safe error category.
 
     Raises:
         HTTPException: If no job exists for the given identifier.
     """
-    job = question_service.get_job(request_id)
+    job = question_workflow.get_job(request_id)
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question not found")
     return QuestionJobResponse(
         request_id=job.request_id,
         status=job.status,
         result=job.result,
+        error_category=job.error_category,
     )

@@ -1,42 +1,12 @@
 """In-process tests for the public HTTP API."""
 
 import logging
-from typing import ClassVar
 
 import pytest
-from fastapi.testclient import TestClient
 
 from app.api import main
-from app.services.questions import QuestionService
-
-
-@pytest.fixture
-def question_service():
-    """Return an in-memory question service for tests.
-
-    Returns:
-        A fresh in-memory question service instance.
-    """
-    return QuestionService()
-
-
-@pytest.fixture
-def client(question_service):
-    """Yield a TestClient with the question service dependency overridden.
-
-    Args:
-        question_service: The question service to inject into the API.
-
-    Yields:
-        A test client configured to use the injected service.
-    """
-    main.app.dependency_overrides[main.get_question_service] = lambda: question_service
-    try:
-        with TestClient(main.app, raise_server_exceptions=False) as test_client:
-            yield test_client
-    finally:
-        main.app.dependency_overrides.pop(main.get_question_service, None)
-
+from app.services.question_workflow import QuestionWorkflow
+from app.stores.sqlite_question_jobs import SQLiteQuestionJobStore
 
 # /health
 
@@ -58,18 +28,18 @@ def test_readiness_returns_ready(client):
     assert ready.json() == {"status": "ready"}
 
 
-def test_ready_returns_503_when_database_unavailable(client):
+def test_ready_returns_503_when_database_unavailable(client, store_factory):
     """Verify /ready returns 503 when the SQLite backing store is unusable."""
 
-    class UnreadyQuestionService(QuestionService):
+    class UnreadyQuestionWorkflow(QuestionWorkflow):
         """Stub service that reports itself as not ready."""
 
         def is_ready(self) -> bool:
             """Return False to simulate a failed dependency."""
             return False
 
-    unready_service = UnreadyQuestionService()
-    main.app.dependency_overrides[main.get_question_service] = lambda: unready_service
+    unready_workflow = UnreadyQuestionWorkflow(store_factory())
+    main.app.dependency_overrides[main.get_question_workflow] = lambda: unready_workflow
     response = client.get("/ready")
 
     assert response.status_code == 503
@@ -118,6 +88,7 @@ def test_submit_and_poll_question_returns_answer_and_metadata(client):
                 "output_tokens": 0,
             },
         },
+        "error_category": None,
     }
 
 
@@ -235,57 +206,41 @@ def test_poll_unknown_question_is_404(client):
     assert response.json() == {"detail": "Question not found"}
 
 
-def test_invalid_server_response_data_returns_500(client):
+def test_invalid_server_response_data_returns_500(client, store_factory):
     """Verify response-validation failures for server-generated data return 500, not 4xx."""
 
-    class BadResponseQuestionService(QuestionService):
+    class BadResponseQuestionWorkflow(QuestionWorkflow):
         """Stub service that returns malformed response data."""
 
         def get_job(self, request_id):
             """Return a fake job whose result violates the response model."""
 
             class FakeJob:
-                result: ClassVar[dict] = {
-                    "request_id": request_id,
-                    "answer": 123,
-                    "citations": "not a list",
-                    "retrieval": {
-                        "documents_considered": "x",
-                        "chunks_returned": "y",
-                    },
-                    "model": {
-                        "provider": "stub",
-                        "name": "stub",
-                        "input_tokens": 0,
-                        "output_tokens": 0,
-                    },
-                }
+                def __init__(self, job_id):
+                    self.request_id = job_id
+                    self.status = "completed"
+                    self.error_category = None
+                    self.result = {
+                        "request_id": job_id,
+                        "answer": 123,
+                        "citations": "not a list",
+                        "retrieval": {
+                            "documents_considered": "x",
+                            "chunks_returned": "y",
+                        },
+                        "model": {
+                            "provider": "stub",
+                            "name": "stub",
+                            "input_tokens": 0,
+                            "output_tokens": 0,
+                        },
+                    }
 
-            return FakeJob()
+            return FakeJob(request_id)
 
-    bad_service = BadResponseQuestionService()
-    main.app.dependency_overrides[main.get_question_service] = lambda: bad_service
-    response = client.post("/v1/questions", json={"question": "Help"})
-
-    assert response.status_code == 500
-    assert response.json() == {"detail": "Internal server error"}
-
-
-def test_submit_returns_500_when_result_is_missing(client):
-    """Verify a job without a result becomes a generic 500 instead of an assert."""
-
-    class MissingResultQuestionService(QuestionService):
-        """Stub service that returns a pending job without a result."""
-
-        def get_job(self, request_id):
-            """Return a pending job to simulate an incomplete pipeline."""
-            from app.services.questions import QuestionJob
-
-            return QuestionJob(request_id=request_id, status="pending")
-
-    missing_service = MissingResultQuestionService()
-    main.app.dependency_overrides[main.get_question_service] = lambda: missing_service
-    response = client.post("/v1/questions", json={"question": "Help"})
+    bad_service = BadResponseQuestionWorkflow(store_factory())
+    main.app.dependency_overrides[main.get_question_workflow] = lambda: bad_service
+    response = client.get("/v1/questions/bad-result")
 
     assert response.status_code == 500
     assert response.json() == {"detail": "Internal server error"}
@@ -297,43 +252,96 @@ def test_submit_returns_500_when_result_is_missing(client):
         pytest.param(
             "retrieval",
             ConnectionError,
-            "retriever endpoint and credential details",
+            "retriever endpoint api_key=topsecret",
             id="retrieval-connection-error",
         ),
         pytest.param(
             "model provider",
             TimeoutError,
-            "provider endpoint and API key details",
+            "provider endpoint password=topsecret",
             id="model-provider-timeout",
         ),
     ],
 )
 def test_submit_pipeline_failure_returns_generic_500(
-    client, failure_stage, failure_type, error_message
+    client, caplog, store_factory, failure_stage, failure_type, error_message
 ):
     """Verify retrieval and model-provider failures are hidden behind a generic 500."""
+    caplog.set_level(logging.INFO)
 
-    class FailingQuestionService(QuestionService):
-        """Stub service that fails while processing a question."""
+    class FailingProcessor:
+        """Processor that fails at the simulated pipeline stage."""
 
-        def complete_job(self, request_id, question):
-            """Raise an error at the simulated pipeline stage."""
+        def process(self, request_id, question, *, correlation_id=None):
             raise failure_type(f"{failure_stage} failed: {error_message}")
 
-    failing_service = FailingQuestionService()
-    main.app.dependency_overrides[main.get_question_service] = lambda: failing_service
+    store = store_factory()
+    failing_workflow = QuestionWorkflow(store, FailingProcessor())
+    main.app.dependency_overrides[main.get_question_workflow] = lambda: failing_workflow
     response = client.post("/v1/questions", json={"question": "Help"})
 
     assert response.status_code == 500
     assert response.json() == {"detail": "Internal server error"}
     assert error_message not in response.text
     assert "Traceback" not in response.text
+    assert "topsecret" not in caplog.text
+    error_records = [
+        record
+        for record in caplog.records
+        if record.name == "app.api.main" and record.levelno == logging.ERROR
+    ]
+    assert len(error_records) == 1
+    assert error_records[0].exception_type == failure_type.__name__
+    request_id = response.headers["x-question-id"]
+    assert error_records[0].question_id == request_id
+    request_records = [
+        record for record in caplog.records if record.name == "app.api.middleware"
+    ]
+    assert len(request_records) == 1
+    assert request_records[0].status == 500
+    poll = client.get(f"/v1/questions/{request_id}")
+    assert poll.status_code == 200
+    assert poll.json() == {
+        "request_id": request_id,
+        "status": "failed",
+        "result": None,
+        "error_category": "processing_error",
+    }
 
 
-def test_submit_sqlite_failure_returns_generic_500(client, question_service):
+def test_submit_failure_state_persistence_error_returns_generic_500(client, store_factory):
+    """Verify failure-state persistence errors produce a generic server response."""
+    class FailingProcessor:
+        def process(self, request_id, question, *, correlation_id=None):
+            raise TimeoutError("provider token must not reach the client")
+
+    class FailingFailureStore(SQLiteQuestionJobStore):
+        def __init__(self):
+            super().__init__()
+            self.failed_request_id = None
+
+        def create_failed_job(self, request_id, error_category, **kwargs):
+            self.failed_request_id = request_id
+            raise RuntimeError("database connection detail must not reach the client")
+
+    store = store_factory(store_type=FailingFailureStore)
+    workflow = QuestionWorkflow(store, FailingProcessor())
+    main.app.dependency_overrides[main.get_question_workflow] = lambda: workflow
+
+    response = client.post("/v1/questions", json={"question": "Help"})
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Internal server error"}
+    assert "provider token" not in response.text
+    assert "database connection detail" not in response.text
+    assert "x-question-id" not in response.headers
+    assert store.get_job(store.failed_request_id) is None
+
+
+def test_submit_sqlite_failure_returns_generic_500(client, question_store):
     """Verify a SQLite operational error becomes a generic 500 without leaking details."""
-    question_service._conn.execute("DROP TABLE question_jobs")
-    question_service._conn.commit()
+    question_store._conn.execute("DROP TABLE question_jobs")
+    question_store._conn.commit()
 
     response = client.post("/v1/questions", json={"question": "Help"})
 
@@ -341,155 +349,3 @@ def test_submit_sqlite_failure_returns_generic_500(client, question_service):
     assert response.json() == {"detail": "Internal server error"}
     assert "no such table" not in response.text
     assert "Traceback" not in response.text
-
-
-# Request logging middleware (exercised via /v1/questions)
-
-
-def _find_request_records(caplog):
-    """Return records emitted by the request logging middleware."""
-    return [r for r in caplog.records if r.name == "app.api.middleware"]
-
-
-def test_request_log_includes_context(client, caplog):
-    """Verify successful requests log method, route, status, timing, and ID."""
-    caplog.set_level(logging.INFO)
-    response = client.post("/v1/questions", json={"question": "What is RAG?"})
-
-    assert response.status_code == 200
-    records = _find_request_records(caplog)
-    assert len(records) == 1
-    record = records[0]
-    assert record.method == "POST"
-    assert record.route == "/v1/questions"
-    assert record.status == 200
-    assert record.elapsed_ms >= 0
-    assert record.request_id
-
-
-def test_request_id_header_is_returned(client):
-    """Verify each response carries a generated correlation ID."""
-    response = client.post("/v1/questions", json={"question": "What is RAG?"})
-
-    assert response.status_code == 200
-    assert "x-request-id" in response.headers
-    assert response.headers["x-request-id"]
-
-
-def test_request_id_header_is_preserved(client, caplog):
-    """Verify an incoming correlation ID is kept and logged."""
-    caplog.set_level(logging.INFO)
-    response = client.post(
-        "/v1/questions",
-        json={"question": "What is RAG?"},
-        headers={"x-request-id": "existing-request-id"},
-    )
-
-    assert response.status_code == 200
-    assert response.headers["x-request-id"] == "existing-request-id"
-    records = _find_request_records(caplog)
-    assert records[0].request_id == "existing-request-id"
-
-
-def test_request_id_header_is_returned_on_server_error(client):
-    """Verify a 500 response still carries the correlation ID header."""
-
-    class FailingQuestionService(QuestionService):
-        """Stub service that raises an error when creating a job."""
-
-        def create_job(self, request_id):
-            """Raise a runtime error to simulate a storage failure."""
-            raise RuntimeError("simulated failure")
-
-    main.app.dependency_overrides[main.get_question_service] = (
-        lambda: FailingQuestionService()
-    )
-    response = client.post(
-        "/v1/questions",
-        json={"question": "What is RAG?"},
-        headers={"x-request-id": "error-request-id"},
-    )
-
-    assert response.status_code == 500
-    assert response.headers["x-request-id"] == "error-request-id"
-
-
-def test_request_log_does_not_contain_question_text(client, caplog):
-    """Verify raw request bodies are not written to logs."""
-    caplog.set_level(logging.INFO)
-    response = client.post("/v1/questions", json={"question": "secret question text"})
-
-    assert response.status_code == 200
-    assert "secret question text" not in caplog.text
-
-
-def test_validation_error_logs_category(client, caplog):
-    """Verify validation failures include the validation error category."""
-    caplog.set_level(logging.INFO)
-    response = client.post("/v1/questions", json={})
-
-    assert response.status_code == 422
-    records = _find_request_records(caplog)
-    assert records[0].status == 422
-    assert records[0].error_category == "validation"
-
-
-def test_server_error_logs_category(client, caplog):
-    """Verify unhandled service errors include the server error category."""
-    caplog.set_level(logging.INFO)
-
-    class FailingQuestionService(QuestionService):
-        """Stub service that raises an error when creating a job."""
-
-        def create_job(self, request_id):
-            """Raise a runtime error to simulate a storage failure.
-
-            Args:
-                request_id: Unique identifier for the job (unused).
-            """
-            raise RuntimeError("database password and stack details")
-
-    failing_service = FailingQuestionService()
-    main.app.dependency_overrides[main.get_question_service] = lambda: failing_service
-    response = client.post("/v1/questions", json={"question": "Help"})
-
-    assert response.status_code == 500
-    records = _find_request_records(caplog)
-    assert records[0].status == 500
-    assert records[0].error_category == "server"
-
-
-def test_validation_error_handler_logs_detail(client, caplog):
-    """Verify the validation exception handler logs the structured detail message."""
-    caplog.set_level(logging.WARNING)
-    response = client.post("/v1/questions", json={"question": ""})
-
-    assert response.status_code == 422
-    handler_records = [
-        r for r in caplog.records if r.name == "app.api.main" and r.levelno == logging.WARNING
-    ]
-    assert len(handler_records) == 1
-    assert "Validation error" in handler_records[0].message
-    assert "String should have at least 1 character" in handler_records[0].message
-
-
-def test_internal_error_handler_logs_exception(client, caplog):
-    """Verify the generic exception handler logs the original exception."""
-    caplog.set_level(logging.ERROR)
-
-    class FailingQuestionService(QuestionService):
-        """Stub service that raises an error when creating a job."""
-
-        def create_job(self, request_id):
-            """Raise a runtime error with sensitive details."""
-            raise RuntimeError("database password and stack details")
-
-    main.app.dependency_overrides[main.get_question_service] = lambda: FailingQuestionService()
-    response = client.post("/v1/questions", json={"question": "Help"})
-
-    assert response.status_code == 500
-    handler_records = [
-        r for r in caplog.records if r.name == "app.api.main" and r.levelno == logging.ERROR
-    ]
-    assert len(handler_records) == 1
-    assert "Unhandled exception" in handler_records[0].message

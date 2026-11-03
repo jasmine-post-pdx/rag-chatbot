@@ -7,6 +7,7 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
     "fastapi>=0.115",
+    "openai>=1.0",
     "pydantic-settings>=2.0",
     "uvicorn>=0.30",
 ]
@@ -28,6 +29,9 @@ packages = ["app"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+    "openai_smoke: opt-in test that calls the real OpenAI Responses API",
+]
 
 [tool.ruff]
 line-length = 100
