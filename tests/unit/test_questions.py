@@ -1,5 +1,8 @@
 """Unit tests for question job storage and workflow."""
 
+import sqlite3
+from contextlib import closing
+
 import pytest
 
 from app.models.questions import (
@@ -9,6 +12,8 @@ from app.models.questions import (
     RetrievalMetrics,
 )
 from app.services.question_workflow import QuestionProcessingError, QuestionWorkflow
+from app.stores.question_jobs import IdempotencyKeyReuseError
+from app.stores.questions import SQLiteQuestionJobStore
 
 
 def _result(request_id: str) -> QuestionResult:
@@ -160,6 +165,96 @@ def test_database_timeout_is_configurable(store_factory):
     row = store._conn.execute("PRAGMA busy_timeout").fetchone()
     assert row is not None
     assert row[0] == 10_000
+
+
+@pytest.fixture
+def legacy_question_database(tmp_path):
+    """Create the original two-column table with a pre-existing serialized job."""
+    db_path = tmp_path / "legacy.db"
+    job_json = (
+        '{"request_id":"legacy-1","status":"completed","result":'
+        '{"request_id":"legacy-1","answer":"Old answer",'
+        '"citations":[{"source_id":"doc","chunk_id":"chunk","text":"excerpt"}],'
+        '"retrieval":{"documents_considered":1,"chunks_returned":1},'
+        '"model":{"provider":"local","name":"stub","input_tokens":0,'
+        '"output_tokens":0}}}'
+    )
+    with closing(sqlite3.connect(db_path)) as conn, conn:
+        conn.execute(
+            "CREATE TABLE question_jobs (request_id TEXT PRIMARY KEY, job_json TEXT NOT NULL)"
+        )
+        conn.execute("INSERT INTO question_jobs VALUES (?, ?)", ("legacy-1", job_json))
+    return db_path, job_json
+
+
+def test_legacy_job_remains_readable_after_upgrade_and_reopen(
+    legacy_question_database, store_factory
+):
+    """Upgrade the old table without rewriting its serialized jobs."""
+    db_path, job_json = legacy_question_database
+    store = store_factory(str(db_path))
+    job = store.get_job("legacy-1")
+    assert job is not None
+    assert job.status == "completed"
+    assert job.error_category is None
+    assert job.result is not None
+    assert job.result.answer == "Old answer"
+    assert job.result.citations[0].text == "excerpt"
+    row = store._conn.execute(
+        "SELECT job_json, created_at, idempotency_key_hash, request_fingerprint "
+        "FROM question_jobs WHERE request_id = ?",
+        ("legacy-1",),
+    ).fetchone()
+    assert row is not None
+    assert row[0] == job_json
+    assert row[1]
+    assert row[2:] == (None, None)
+    store.create_job("new-job")
+    store.close()
+
+    reopened = store_factory(str(db_path))
+    assert reopened.get_job("legacy-1") == job
+    assert reopened.get_job("new-job") == QuestionJob(request_id="new-job", status="pending")
+
+
+def test_store_closes_connection_if_table_setup_fails(monkeypatch):
+    """A constructor failure must not leak its already-open connection."""
+    conn = sqlite3.connect(":memory:")
+    monkeypatch.setattr(sqlite3, "connect", lambda *args, **kwargs: conn)
+
+    def fail_setup(self):
+        raise sqlite3.DatabaseError("table setup failed")
+
+    monkeypatch.setattr(SQLiteQuestionJobStore, "_ensure_table", fail_setup)
+    try:
+        with pytest.raises(sqlite3.DatabaseError, match="table setup failed"):
+            SQLiteQuestionJobStore()
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            conn.execute("SELECT 1")
+    finally:
+        conn.close()
+
+
+def test_idempotency_records_survive_reopen_and_reject_conflicts(tmp_path, store_factory):
+    """Preserve keyed terminal jobs, fingerprints, and conflict semantics."""
+    db_path = str(tmp_path / "questions.db")
+    store = store_factory(db_path)
+    job = store.create_completed_job(
+        "first", _result("first"), idempotency_key_hash="key", request_fingerprint="question"
+    )
+    store.close()
+
+    reopened = store_factory(db_path)
+    assert reopened.get_by_idempotency_key("key") == (job, "question")
+    assert reopened.create_completed_job(
+        "second", _result("second"), idempotency_key_hash="key", request_fingerprint="question"
+    ) == job
+    with pytest.raises(IdempotencyKeyReuseError):
+        reopened.create_completed_job(
+            "third", _result("third"), idempotency_key_hash="key", request_fingerprint="other"
+        )
+    assert reopened.get_job("second") is None
+    assert reopened.get_job("third") is None
 
 
 # Workflow tests

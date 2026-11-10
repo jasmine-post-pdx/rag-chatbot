@@ -6,7 +6,7 @@ import pytest
 
 from app.api import main
 from app.services.question_workflow import QuestionWorkflow
-from app.stores.sqlite_question_jobs import SQLiteQuestionJobStore
+from app.stores.questions import SQLiteQuestionJobStore
 
 # /health
 
@@ -90,6 +90,48 @@ def test_submit_and_poll_question_returns_answer_and_metadata(client):
         },
         "error_category": None,
     }
+
+
+def test_idempotent_submission_reuses_result_and_rejects_different_question(client):
+    """The same key reuses its stored result but cannot identify another question."""
+    headers = {"Idempotency-Key": "question-key"}
+    first = client.post("/v1/questions", json={"question": "First?"}, headers=headers)
+    retry = client.post("/v1/questions", json={"question": "First?"}, headers=headers)
+    conflict = client.post("/v1/questions", json={"question": "Second?"}, headers=headers)
+
+    assert first.status_code == 200
+    assert retry.status_code == 200
+    assert retry.json() == first.json()
+    assert conflict.status_code == 409
+    assert conflict.json() == {"detail": "Idempotency-Key was already used for a different question"}
+
+
+def test_idempotent_failed_submission_reuses_failed_job(client, store_factory):
+    """A retry of a failed job retains its original ID without reprocessing."""
+    class FailingProcessor:
+        def __init__(self):
+            self.calls = 0
+
+        def process(self, request_id, question, *, correlation_id=None):
+            self.calls += 1
+            raise TimeoutError("private provider detail")
+
+    store = store_factory()
+    processor = FailingProcessor()
+    workflow = QuestionWorkflow(store, processor)
+    main.app.dependency_overrides[main.get_question_workflow] = lambda: workflow
+    headers = {"Idempotency-Key": "failed-key"}
+    first = client.post("/v1/questions", json={"question": "Help"}, headers=headers)
+    retry = client.post("/v1/questions", json={"question": "Help"}, headers=headers)
+
+    assert first.status_code == retry.status_code == 500
+    assert first.json() == retry.json() == {"detail": "Internal server error"}
+    assert first.headers["x-question-id"] == retry.headers["x-question-id"]
+    assert processor.calls == 1
+    job = store.get_job(first.headers["x-question-id"])
+    assert job is not None
+    assert job.status == "failed"
+    assert job.error_category == "processing_error"
 
 
 def test_submit_trims_whitespace_from_question(client):

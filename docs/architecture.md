@@ -2,7 +2,8 @@
 
 This page separates the system that runs today from the RAG architecture the
 project is building toward. The current API and SQLite job store are working;
-document ingestion, retrieval, and model integrations are still future work.
+document ingestion and retrieval are still future work. Generation can use a
+local placeholder or the configured OpenAI provider.
 
 ## Current implementation
 
@@ -12,7 +13,7 @@ client
     -> `QuestionWorkflow` (`app/services/question_workflow.py`)
       -> `QuestionProcessor` (`app/services/question_processor.py`)
       -> `QuestionJobStore` (`app/stores/question_jobs.py`)
-        -> `SQLiteQuestionJobStore` (`app/stores/sqlite_question_jobs.py`)
+        -> `SQLiteQuestionJobStore` (`app/stores/questions.py`)
 ```
 
 | Area | Current responsibility |
@@ -20,20 +21,23 @@ client
 | `app/api/` | Health and readiness checks, synchronous question submission, job status responses, validation, and request correlation. |
 | `app/config/` | Environment-based settings and standard-library logging configuration. |
 | `app/services/question_workflow.py` | Coordinates job creation, answer processing, and success or failure persistence. |
-| `app/services/question_processor.py` | Processor interface and the current placeholder answer implementation. |
+| `app/services/question_processor.py` | Processor interface and placeholder implementation; the answerer also supports a configured model provider. |
 | `app/stores/` | Job-store interface and SQLite-backed implementation. |
 | `scripts/question_job_maintenance.py` | SQLite snapshots, tiered backup rotation, and terminal-job archiving. |
 | `app/models/questions.py` | Internal job and answer DTOs shared by processing, storage, and API layers. |
 | `app/api/schemas.py` | Public response model for job status, including safe processing failure categories. |
 | `app/retrieval/`, `app/tools/` | Package placeholders; no retrieval or tool behavior is implemented yet. |
 
-The workflow and SQLite store are initialized during the FastAPI application
-lifespan and shared with routes through dependency injection. Question
+The FastAPI application lifespan creates, verifies, and owns the SQLite store,
+injects it into the workflow, and closes it on shutdown or failed startup after
+creation. The workflow is shared with routes through dependency injection. Question
 submission processes the question, then persists and returns its terminal job
 in one request; in-flight work is not stored. Processing failures are persisted
 as failed jobs with a safe error category; the submit request still returns a
-generic server error. SQLite stores the job;
-the optional Compose pgvector service is not connected to the application.
+generic server error. The store serializes jobs as JSON in SQLite, preserves
+older two-column job tables when adding maintenance and idempotency metadata,
+and checks readiness by querying the job table. The optional Compose pgvector
+service is not connected to the application.
 The maintenance command keeps 30 days of jobs live, archives older terminal
 jobs, and expires archived rows after the configured archive period.
 

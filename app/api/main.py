@@ -26,7 +26,7 @@ from app.services.question_workflow import (
     QuestionWorkflow,
 )
 from app.stores.question_jobs import IdempotencyKeyReuseError
-from app.stores.sqlite_question_jobs import SQLiteQuestionJobStore
+from app.stores.questions import SQLiteQuestionJobStore
 
 logger = logging.getLogger(__name__)
 

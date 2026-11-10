@@ -4,7 +4,7 @@ import logging
 
 from app.api import main
 from app.services.question_workflow import QuestionWorkflow
-from app.stores.sqlite_question_jobs import SQLiteQuestionJobStore
+from app.stores.questions import SQLiteQuestionJobStore
 
 
 def _find_request_records(caplog):

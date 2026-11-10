@@ -18,7 +18,11 @@ class SQLiteQuestionJobStore:
             os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
         self._conn = sqlite3.connect(db_path, check_same_thread=False, timeout=timeout)
         self._lock = threading.Lock()
-        self._ensure_table()
+        try:
+            self._ensure_table()
+        except BaseException:
+            self._conn.close()
+            raise
 
     def _ensure_table(self) -> None:
         """Create the jobs table and enable WAL for file-backed databases."""
