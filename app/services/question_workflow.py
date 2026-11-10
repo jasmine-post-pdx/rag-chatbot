@@ -1,6 +1,7 @@
 """Coordinate question processing with question job persistence."""
 
 import hashlib
+from collections.abc import Callable
 from uuid import uuid4
 
 from app.models.questions import QuestionJob, QuestionResult
@@ -32,9 +33,15 @@ class QuestionStatePersistenceError(Exception):
 class QuestionWorkflow:
     """Process questions and persist only terminal job states."""
 
-    def __init__(self, store: QuestionJobStore, processor: QuestionProcessor | None = None):
+    def __init__(
+        self,
+        store: QuestionJobStore,
+        processor: QuestionProcessor | None = None,
+        job_id_factory: Callable[[], str] = lambda: str(uuid4()),
+    ):
         self._store = store
         self._processor = processor or PlaceholderQuestionProcessor()
+        self._job_id_factory = job_id_factory
 
     def submit_question(
         self,
@@ -48,14 +55,14 @@ class QuestionWorkflow:
         The optional correlation ID identifies the HTTP request independently of
         the job ID; an idempotency key can reuse a previously persisted job.
         """
-        return self.submit(
-            str(uuid4()),
+        return self._process_and_persist(
+            self._job_id_factory(),
             question,
             correlation_id=correlation_id,
             idempotency_key=idempotency_key,
         )
 
-    def submit(
+    def _process_and_persist(
         self,
         request_id: str,
         question: str,
@@ -66,7 +73,7 @@ class QuestionWorkflow:
         """Process a question, then persist either success or failure.
 
         Args:
-            request_id: Identifier assigned to the question job.
+            request_id: Service-generated identifier assigned to the question job.
             question: User question to process.
             correlation_id: Optional middleware request ID for log correlation.
             idempotency_key: Optional client key used to reuse a terminal result.

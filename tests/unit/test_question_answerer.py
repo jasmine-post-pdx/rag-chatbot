@@ -166,9 +166,11 @@ def test_answerer_propagates_client_errors():
 def test_answerer_satisfies_question_processor_interface(store_factory):
     """Verify the answerer plugs into the workflow as a question processor."""
     processor: QuestionProcessor = QuestionAnswerer(FakeLLMClient(model="fake-model"))
-    workflow = QuestionWorkflow(store_factory(":memory:"), processor)
+    workflow = QuestionWorkflow(
+        store_factory(":memory:"), processor, job_id_factory=lambda: "req-1"
+    )
 
-    result = workflow.submit("req-1", "What is RAG?")
+    result = workflow.submit_question("What is RAG?")
 
     assert result.answer == "Fake answer to: What is RAG?"
     assert result.model.provider == "fake"
@@ -182,11 +184,13 @@ def test_answerer_satisfies_question_processor_interface(store_factory):
 def test_workflow_marks_job_failed_when_answerer_client_fails(store_factory):
     """Verify client failures through the answerer are persisted as failed jobs."""
     workflow = QuestionWorkflow(
-        store_factory(":memory:"), QuestionAnswerer(FailingClient())
+        store_factory(":memory:"),
+        QuestionAnswerer(FailingClient()),
+        job_id_factory=lambda: "req-1",
     )
 
     with pytest.raises(QuestionProcessingError):
-        workflow.submit("req-1", "What is RAG?")
+        workflow.submit_question("What is RAG?")
 
     job = workflow.get_job("req-1")
     assert job is not None

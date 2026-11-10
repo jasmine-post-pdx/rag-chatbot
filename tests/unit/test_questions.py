@@ -375,9 +375,9 @@ def test_submission_persists_failed_job_with_generated_id(store_factory):
 def test_workflow_completes_job_with_placeholder_result(store_factory):
     """Verify the default processor completes a job with its placeholder result."""
     store = store_factory(":memory:")
-    workflow = QuestionWorkflow(store)
+    workflow = QuestionWorkflow(store, job_id_factory=lambda: "req-1")
 
-    result = workflow.submit("req-1", "What is RAG?")
+    result = workflow.submit_question("What is RAG?")
 
     assert result.answer == "This is a placeholder answer for: What is RAG?"
     job = workflow.get_job("req-1")
@@ -405,9 +405,9 @@ def test_workflow_passes_question_to_processor_and_persists_its_result(store_fac
 
     store = store_factory(":memory:")
     processor = RecordingProcessor()
-    workflow = QuestionWorkflow(store, processor)
+    workflow = QuestionWorkflow(store, processor, job_id_factory=lambda: "req-custom")
 
-    result = workflow.submit("req-custom", "Use my processor")
+    result = workflow.submit_question("Use my processor")
 
     assert processor.call == ("req-custom", "Use my processor")
     assert result == expected
@@ -430,10 +430,10 @@ def test_workflow_persists_failure_without_preserving_processor_exception(store_
             raise TimeoutError("private provider endpoint and credential detail")
 
     store = store_factory(":memory:")
-    workflow = QuestionWorkflow(store, FailingProcessor())
+    workflow = QuestionWorkflow(store, FailingProcessor(), job_id_factory=lambda: "req-1")
 
     with pytest.raises(QuestionProcessingError) as error:
-        workflow.submit("req-1", "What is RAG?")
+        workflow.submit_question("What is RAG?")
 
     assert error.value.exception_type == "TimeoutError"
     assert error.value.__cause__ is None
@@ -459,10 +459,10 @@ def test_workflow_marks_mismatched_processor_result_as_failed(store_factory):
             return _result("different-request")
 
     store = store_factory(":memory:")
-    workflow = QuestionWorkflow(store, MismatchedProcessor())
+    workflow = QuestionWorkflow(store, MismatchedProcessor(), job_id_factory=lambda: "req-1")
 
     with pytest.raises(QuestionProcessingError) as error:
-        workflow.submit("req-1", "What is RAG?")
+        workflow.submit_question("What is RAG?")
 
     assert error.value.exception_type == "ValueError"
     assert error.value.__cause__ is None
