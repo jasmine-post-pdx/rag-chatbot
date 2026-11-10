@@ -28,9 +28,9 @@ application structure so each part of the pipeline can evolve independently:
 - `app/api/schemas.py` currently holds the public polling response schema.
   Other request and response models still live in the API and service modules;
   moving all public schemas here is a future refinement.
-- `app/core/config.py` centralizes settings loaded from environment variables
+- `app/config/settings.py` centralizes settings loaded from environment variables
   and an optional `.env` file. It keeps environment-specific values out of the
-  source code.
+  source code; `app/config/logging.py` configures application logging.
 - `app/services/question_workflow.py` coordinates job creation, answer
   processing, and persistence. The processor interface and placeholder live in
   `app/services/question_processor.py`; the `QuestionJobStore` interface and

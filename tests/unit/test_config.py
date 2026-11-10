@@ -3,7 +3,7 @@
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from app.core.config import Settings
+from app.config.settings import Settings
 
 
 def test_postgres_dsn_encodes_special_characters():

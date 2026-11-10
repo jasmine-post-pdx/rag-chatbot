@@ -14,7 +14,7 @@ import time
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.core.logging import log_request_summary, normalize_request_id
+from app.config.logging import log_request_summary, normalize_request_id
 
 logger = logging.getLogger(__name__)
 

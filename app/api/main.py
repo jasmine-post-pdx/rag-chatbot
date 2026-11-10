@@ -12,12 +12,12 @@ from pydantic import BaseModel, StringConstraints
 
 from app.api.middleware import REQUEST_ID_HEADER, RequestLogMiddleware
 from app.api.schemas import QuestionJobResponse
-from app.core.config import settings
-from app.core.logging import (
+from app.config.logging import (
     configure_logging,
     log_exception_summary,
     log_validation_failure,
 )
+from app.config.settings import settings
 from app.models.questions import QuestionResult
 from app.services.processor_factory import build_question_processor
 from app.services.question_workflow import (

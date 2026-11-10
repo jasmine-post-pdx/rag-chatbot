@@ -3,7 +3,7 @@
 import logging
 import time
 
-from app.core.logging import sanitize_exception_summary
+from app.config.logging import sanitize_exception_summary
 from app.models.generation import LLMClient
 from app.models.questions import (
     ModelMetrics,

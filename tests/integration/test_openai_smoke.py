@@ -19,7 +19,7 @@ def test_openai_responses_api_smoke():
     if os.getenv("RUN_OPENAI_SMOKE") != "1":
         pytest.skip("Set RUN_OPENAI_SMOKE=1 to enable the real-provider smoke test")
 
-    from app.core.config import Settings
+    from app.config.settings import Settings
 
     settings = Settings()
     if settings.openai_api_key is None:

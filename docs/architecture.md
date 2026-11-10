@@ -18,7 +18,7 @@ client
 | Area | Current responsibility |
 | --- | --- |
 | `app/api/` | Health and readiness checks, synchronous question submission, job status responses, validation, and request correlation. |
-| `app/core/` | Environment-based settings and standard-library logging configuration. |
+| `app/config/` | Environment-based settings and standard-library logging configuration. |
 | `app/services/question_workflow.py` | Coordinates job creation, answer processing, and success or failure persistence. |
 | `app/services/question_processor.py` | Processor interface and the current placeholder answer implementation. |
 | `app/stores/` | Job-store interface and SQLite-backed implementation. |
