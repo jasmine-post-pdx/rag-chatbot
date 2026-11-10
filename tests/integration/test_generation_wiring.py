@@ -3,8 +3,8 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api import main
-from app.models import FakeLLMClient
+from app import main
+from app.llm import FakeLLMClient
 from app.services.question_answerer import QuestionAnswerer
 from app.services.processor_factory import UnknownGenerationProviderError
 

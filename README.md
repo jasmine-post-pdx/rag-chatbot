@@ -1,8 +1,8 @@
 # rag-chatbot — RAG Engineering Lab
 
 > Status: This is an active learning project. The HTTP API, request/response
-> schemas, and SQLite-backed question-job storage are implemented, but the
-> retrieval and generation stages still return placeholders. I consider the
+> schemas, SQLite-backed question-job storage, and optional OpenAI generation
+> are implemented, but retrieval is still a placeholder. I consider the
 > current milestone complete enough to build on: the structure is testable,
 > documented, and ready for real RAG adapters to be dropped in.
 
@@ -23,11 +23,11 @@ The project began as a single FastAPI endpoint that accepted a question and
 returned a placeholder answer. I reorganized that into a more conventional
 application structure so each part of the pipeline can evolve independently:
 
-- `app/api/main.py` is the HTTP entry point. It wires the question workflow
-  through FastAPI dependency injection and maps errors to clean HTTP responses.
-- `app/api/schemas.py` currently holds the public polling response schema.
-  Other request and response models still live in the API and service modules;
-  moving all public schemas here is a future refinement.
+- `app/main.py` sets up the application, lifespan, middleware, and error handlers.
+  `app/routers/` defines HTTP endpoints, and `app/dependencies/` provides the
+  shared question workflow to the routes.
+- `app/schemas/` holds public question and error schemas. API handlers map
+  service DTOs to these independently defined response models.
 - `app/config/settings.py` centralizes settings loaded from environment variables
   and an optional `.env` file. It keeps environment-specific values out of the
   source code; `app/config/logging.py` configures application logging.
@@ -36,18 +36,20 @@ application structure so each part of the pipeline can evolve independently:
   live in `app/services/question_processor.py`; the `QuestionJobStore` interface
   and SQLite implementation live under `app/stores/`. Completed and failed jobs
   survive restarts and can be retrieved through the status endpoint.
+- `app/services/models.py` defines internal question result and job DTOs.
 - `app/retrieval/` will own chunking, indexing, search, ranking, and context
   assembly once the retrieval adapters are added.
-- `app/models/` holds question-domain DTOs and provider-neutral generation
-  interfaces, including the OpenAI Responses adapter and a deterministic fake.
+- `app/llm/` holds provider-neutral generation interfaces, including the
+  OpenAI Responses adapter and a deterministic fake.
 - `app/tools/` is reserved for optional callable tools the generator can use.
 - `tests/unit/`, `tests/integration/`, and `tests/evals/` mirror these
   responsibilities and hold the corresponding automated tests.
 
 This structure keeps API handlers thin and separates workflow, answer
-processing, and job persistence. Retrieval, model, and tool packages remain
-future adapters. Processing failures are stored as failed jobs with the safe
-`processing_error` category; submission still returns a generic HTTP 500.
+processing, and job persistence. Retrieval and tool packages remain placeholders;
+generation supports local and OpenAI adapters. Processing failures are stored
+as failed jobs with the safe `processing_error` category; submission still
+returns a generic HTTP 500.
 
 ## What I'm learning here
 
@@ -173,13 +175,13 @@ CI workflow has not yet been added.
 With uv:
 
 ```bash
-uv run uvicorn app.api.main:app --reload
+uv run uvicorn app.main:app --reload
 ```
 
 With a pip-managed virtual environment:
 
 ```bash
-uvicorn app.api.main:app --reload
+uvicorn app.main:app --reload
 ```
 
 ### API
@@ -414,8 +416,8 @@ tests as those layers are added.
 - **2026-10-23:** Pydantic models work well as both request/response schemas
   and internal DTOs, but it is important to keep internal-only fields out of
   public response models as the job state grows. A dedicated `QuestionJobResponse`
-  schema in `app/api/schemas.py` now maps the internal `QuestionJob` DTO to the
-  public status contract.
+  schema (now in `app/schemas/questions.py`) maps the internal `QuestionJob` DTO
+  to the public status contract.
 - **2026-10-20:** SQLite with a thread lock is sufficient for a single-process
   FastAPI app using thread-pool workers, but it will not scale to multiple
   processes or workers.
@@ -459,7 +461,7 @@ that they support this project's learning goals. Some may be deferred to future
 projects.
 
 - [ ] Add real document ingestion (load, chunk, embed) under `app/retrieval/`.
-- [ ] Add a local or API-based embedding model adapter under `app/models/`.
+- [ ] Add a local or API-based embedding model adapter under `app/llm/`.
 - [ ] Add a generation adapter that builds prompts from retrieved context.
 - [ ] Replace the placeholder processor with retrieval-grounded generation.
 - [ ] Store chunks and embeddings in the Postgres/pgvector container.

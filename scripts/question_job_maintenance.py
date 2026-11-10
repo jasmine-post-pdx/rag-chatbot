@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Sequence
 
 from app.config.settings import settings
-from app.models.questions import QuestionJob
+from app.services.models import QuestionJob
 from app.stores.questions import SQLiteQuestionJobStore
 
 BATCH_SIZE = 500

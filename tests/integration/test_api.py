@@ -5,8 +5,9 @@ import logging
 
 import pytest
 
-from app.api import main
-from app.models.questions import QuestionJob
+from app import main
+from app.dependencies.questions import get_question_workflow
+from app.services.models import QuestionJob
 from app.services.question_workflow import QuestionWorkflow
 from app.stores.questions import SQLiteQuestionJobStore
 
@@ -41,7 +42,7 @@ def test_ready_returns_503_when_database_unavailable(client, store_factory):
             return False
 
     unready_workflow = UnreadyQuestionWorkflow(store_factory())
-    main.app.dependency_overrides[main.get_question_workflow] = lambda: unready_workflow
+    main.app.dependency_overrides[get_question_workflow] = lambda: unready_workflow
     response = client.get("/ready")
 
     assert response.status_code == 503
@@ -121,7 +122,7 @@ def test_idempotent_failed_submission_reuses_failed_job(client, store_factory):
     store = store_factory()
     processor = FailingProcessor()
     workflow = QuestionWorkflow(store, processor)
-    main.app.dependency_overrides[main.get_question_workflow] = lambda: workflow
+    main.app.dependency_overrides[get_question_workflow] = lambda: workflow
     headers = {"Idempotency-Key": "failed-key"}
     first = client.post("/v1/questions", json={"question": "Help"}, headers=headers)
     retry = client.post("/v1/questions", json={"question": "Help"}, headers=headers)
@@ -291,7 +292,7 @@ def test_submit_missing_or_malformed_result_returns_generic_500(client, store_fa
             return result
 
     workflow = BadResponseQuestionWorkflow(store_factory())
-    main.app.dependency_overrides[main.get_question_workflow] = lambda: workflow
+    main.app.dependency_overrides[get_question_workflow] = lambda: workflow
     response = client.post(
         "/v1/questions", json={"question": "Help"}, headers={"x-request-id": "test-request"}
     )
@@ -334,7 +335,7 @@ def test_invalid_server_response_data_returns_500(client, store_factory):
             return FakeJob(request_id)
 
     bad_service = BadResponseQuestionWorkflow(store_factory())
-    main.app.dependency_overrides[main.get_question_workflow] = lambda: bad_service
+    main.app.dependency_overrides[get_question_workflow] = lambda: bad_service
     response = client.get("/v1/questions/bad-result")
 
     assert response.status_code == 500
@@ -372,7 +373,7 @@ def test_submit_pipeline_failure_returns_generic_500(
 
     store = store_factory()
     failing_workflow = QuestionWorkflow(store, FailingProcessor())
-    main.app.dependency_overrides[main.get_question_workflow] = lambda: failing_workflow
+    main.app.dependency_overrides[get_question_workflow] = lambda: failing_workflow
     response = client.post("/v1/questions", json={"question": "Help"})
 
     assert response.status_code == 500
@@ -383,14 +384,14 @@ def test_submit_pipeline_failure_returns_generic_500(
     error_records = [
         record
         for record in caplog.records
-        if record.name == "app.api.main" and record.levelno == logging.ERROR
+        if record.name == "app.main" and record.levelno == logging.ERROR
     ]
     assert len(error_records) == 1
     assert error_records[0].exception_type == failure_type.__name__
     request_id = response.headers["x-question-id"]
     assert error_records[0].question_id == request_id
     request_records = [
-        record for record in caplog.records if record.name == "app.api.middleware"
+        record for record in caplog.records if record.name == "app.middleware"
     ]
     assert len(request_records) == 1
     assert request_records[0].status == 500
@@ -421,7 +422,7 @@ def test_submit_failure_state_persistence_error_returns_generic_500(client, stor
 
     store = store_factory(store_type=FailingFailureStore)
     workflow = QuestionWorkflow(store, FailingProcessor())
-    main.app.dependency_overrides[main.get_question_workflow] = lambda: workflow
+    main.app.dependency_overrides[get_question_workflow] = lambda: workflow
 
     response = client.post("/v1/questions", json={"question": "Help"})
 

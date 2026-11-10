@@ -5,7 +5,7 @@ import sqlite3
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api import main
+from app import main
 from app.stores.questions import SQLiteQuestionJobStore
 
 

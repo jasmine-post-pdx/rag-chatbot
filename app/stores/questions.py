@@ -6,7 +6,7 @@ import threading
 from datetime import UTC, datetime
 from typing import Literal
 
-from app.models.questions import QuestionJob, QuestionResult
+from app.services.models import QuestionJob, QuestionResult
 from app.stores.question_jobs import IdempotencyKeyReuseError
 
 

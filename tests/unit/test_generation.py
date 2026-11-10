@@ -6,7 +6,7 @@ from types import ModuleType, SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from app.models import (
+from app.llm import (
     GenerationResult,
     LLMClient,
     MissingAPIKeyError,

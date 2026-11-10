@@ -1,6 +1,6 @@
 """LLM, embedding, and related model adapters."""
 
-from app.models.generation import (
+from app.llm.generation import (
     FakeLLMClient,
     GenerationResult,
     LLMClient,

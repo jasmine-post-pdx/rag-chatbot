@@ -1,6 +1,6 @@
 """Build the configured question processor from generation settings."""
 
-from app.models.generation import OpenAIResponsesClient
+from app.llm.generation import OpenAIResponsesClient
 from app.services.question_answerer import QuestionAnswerer
 from app.services.question_processor import (
     PlaceholderQuestionProcessor,

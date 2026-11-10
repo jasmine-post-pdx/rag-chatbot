@@ -7,7 +7,7 @@ from uuid import UUID
 
 import pytest
 
-from app.models.questions import (
+from app.services.models import (
     ModelMetrics,
     QuestionJob,
     QuestionResult,

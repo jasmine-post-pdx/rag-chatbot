@@ -4,8 +4,8 @@ import logging
 import time
 
 from app.config.logging import sanitize_exception_summary
-from app.models.generation import LLMClient
-from app.models.questions import (
+from app.llm.generation import LLMClient
+from app.services.models import (
     ModelMetrics,
     QuestionResult,
     RetrievalMetrics,

@@ -2,7 +2,7 @@
 
 from typing import Literal, Protocol
 
-from app.models.questions import QuestionJob, QuestionResult
+from app.services.models import QuestionJob, QuestionResult
 
 
 class IdempotencyKeyReuseError(ValueError):

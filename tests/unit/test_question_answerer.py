@@ -4,8 +4,8 @@ import logging
 
 import pytest
 
-from app.models import FakeLLMClient, GenerationResult
-from app.models.questions import ModelMetrics, RetrievalMetrics
+from app.llm import FakeLLMClient, GenerationResult
+from app.services.models import ModelMetrics, RetrievalMetrics
 from app.services.question_answerer import QuestionAnswerer
 from app.services.question_processor import QuestionProcessor
 from app.services.question_workflow import QuestionProcessingError, QuestionWorkflow

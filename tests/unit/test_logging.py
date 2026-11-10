@@ -11,7 +11,7 @@ from app.config.logging import RequestFormatter, normalize_request_id, sanitize_
 def test_request_formatter_emits_approved_fields_and_omits_unknown_fields():
     """Verify the formatter includes approved fields and omits unknown fields."""
     record = logging.LogRecord(
-        name="app.api.middleware",
+        name="app.middleware",
         level=logging.INFO,
         pathname="",
         lineno=0,

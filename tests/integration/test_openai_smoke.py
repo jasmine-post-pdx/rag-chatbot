@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from app.models.generation import OpenAIResponsesClient
+from app.llm.generation import OpenAIResponsesClient
 
 
 @pytest.mark.openai_smoke

@@ -9,7 +9,7 @@ local placeholder or the configured OpenAI provider.
 
 ```text
 client
-  -> FastAPI routes and request middleware (`app/api/`)
+  -> FastAPI routes (`app/routers/`) and request middleware (`app/middleware.py`)
     -> `QuestionWorkflow` (`app/services/question_workflow.py`)
       -> `QuestionProcessor` (`app/services/question_processor.py`)
       -> `QuestionJobStore` (`app/stores/question_jobs.py`)
@@ -18,14 +18,16 @@ client
 
 | Area | Current responsibility |
 | --- | --- |
-| `app/api/` | Health and readiness checks, synchronous question submission, job status responses, validation, and request correlation. |
+| `app/main.py`, `app/middleware.py` | Application lifespan, error handling, and request correlation. |
+| `app/routers/`, `app/dependencies/` | Health, readiness, and question endpoints with shared workflow lookup. |
 | `app/config/` | Environment-based settings and standard-library logging configuration. |
 | `app/services/question_workflow.py` | Generates job IDs, coordinates answer processing, idempotency, and success or failure persistence. |
 | `app/services/question_processor.py` | Processor interface and placeholder implementation; the answerer also supports a configured model provider. |
 | `app/stores/` | Job-store interface and SQLite-backed implementation. |
 | `scripts/question_job_maintenance.py` | SQLite snapshots, tiered backup rotation, and terminal-job archiving. |
-| `app/models/questions.py` | Internal job and answer DTOs shared by processing, storage, and API layers. |
-| `app/api/schemas.py` | Public response model for job status, including safe processing failure categories. |
+| `app/services/models.py` | Internal job and answer DTOs shared by processing and storage. |
+| `app/schemas/` | Independent public question and error schemas, including safe processing failure categories. |
+| `app/llm/` | Generation interfaces, local fake, and OpenAI Responses adapter. |
 | `app/retrieval/`, `app/tools/` | Package placeholders; no retrieval or tool behavior is implemented yet. |
 
 The FastAPI application lifespan creates, verifies, and owns the SQLite store,
@@ -35,7 +37,8 @@ submission assigns a job ID, checks any idempotency key, processes the question,
 then persists and returns its terminal result in one request; in-flight work is
 not stored. The HTTP correlation ID is passed independently to the processor.
 Processing failures are persisted as failed jobs with a safe error category; the
-submit request still returns a generic server error. The store serializes jobs as
+submit request still returns a generic server error. API handlers map service
+results and their nested metadata to public schemas. The store serializes jobs as
 JSON in SQLite, preserves older two-column job tables when adding maintenance and
 idempotency metadata, and checks readiness with
 `SELECT request_id FROM question_jobs LIMIT 1`. The optional Compose pgvector
@@ -66,7 +69,7 @@ client -> API -> service/orchestrator -> retrieval -> model generation -> answer
 ```
 
 - Add ingestion, chunking, embeddings, search, ranking, and context assembly
-  under `app/retrieval/` and model adapters under `app/models/`.
+  under `app/retrieval/` and additional model adapters under `app/llm/`.
 - Connect the optional Postgres/pgvector service for document chunks and
   embeddings; keep SQLite focused on question-job state unless that boundary
   changes deliberately.

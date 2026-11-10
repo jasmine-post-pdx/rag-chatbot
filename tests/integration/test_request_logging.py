@@ -2,14 +2,15 @@
 
 import logging
 
-from app.api import main
+from app import main
+from app.dependencies.questions import get_question_workflow
 from app.services.question_workflow import QuestionWorkflow
 from app.stores.questions import SQLiteQuestionJobStore
 
 
 def _find_request_records(caplog):
     """Return records emitted by the request logging middleware."""
-    return [r for r in caplog.records if r.name == "app.api.middleware"]
+    return [r for r in caplog.records if r.name == "app.middleware"]
 
 
 def test_request_log_includes_context(client, caplog):
@@ -80,7 +81,7 @@ def test_request_id_header_is_returned_on_server_error(client, store_factory):
             raise RuntimeError("simulated failure")
 
     failing_workflow = QuestionWorkflow(store_factory(store_type=FailingStore))
-    main.app.dependency_overrides[main.get_question_workflow] = lambda: failing_workflow
+    main.app.dependency_overrides[get_question_workflow] = lambda: failing_workflow
     response = client.post(
         "/v1/questions",
         json={"question": "What is RAG?"},
@@ -128,7 +129,7 @@ def test_server_error_logs_category(client, caplog, store_factory):
             raise RuntimeError("database password and stack details")
 
     failing_workflow = QuestionWorkflow(store_factory(store_type=FailingStore))
-    main.app.dependency_overrides[main.get_question_workflow] = lambda: failing_workflow
+    main.app.dependency_overrides[get_question_workflow] = lambda: failing_workflow
     response = client.post("/v1/questions", json={"question": "Help"})
 
     assert response.status_code == 500
@@ -144,7 +145,7 @@ def test_validation_error_log_omits_validation_details(client, caplog):
 
     assert response.status_code == 422
     handler_records = [
-        r for r in caplog.records if r.name == "app.api.main" and r.levelno == logging.WARNING
+        r for r in caplog.records if r.name == "app.main" and r.levelno == logging.WARNING
     ]
     assert len(handler_records) == 1
     assert "Request validation failed" in handler_records[0].message
@@ -164,12 +165,12 @@ def test_internal_error_handler_logs_exception(client, caplog, store_factory):
             raise RuntimeError("database password=hidden and token=hidden-too")
 
     failing_workflow = QuestionWorkflow(store_factory(store_type=FailingStore))
-    main.app.dependency_overrides[main.get_question_workflow] = lambda: failing_workflow
+    main.app.dependency_overrides[get_question_workflow] = lambda: failing_workflow
     response = client.post("/v1/questions", json={"question": "Help"})
 
     assert response.status_code == 500
     handler_records = [
-        r for r in caplog.records if r.name == "app.api.main" and r.levelno == logging.ERROR
+        r for r in caplog.records if r.name == "app.main" and r.levelno == logging.ERROR
     ]
     assert len(handler_records) == 1
     assert "Unhandled exception" in handler_records[0].message

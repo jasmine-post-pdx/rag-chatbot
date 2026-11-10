@@ -4,7 +4,7 @@ import hashlib
 from collections.abc import Callable
 from uuid import uuid4
 
-from app.models.questions import QuestionJob, QuestionResult
+from app.services.models import QuestionJob, QuestionResult
 from app.services.question_processor import (
     PlaceholderQuestionProcessor,
     QuestionProcessor,
