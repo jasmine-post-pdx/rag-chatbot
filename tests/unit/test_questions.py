@@ -1,7 +1,9 @@
 """Unit tests for question job storage and workflow."""
 
+import hashlib
 import sqlite3
 from contextlib import closing
+from uuid import UUID
 
 import pytest
 
@@ -258,6 +260,116 @@ def test_idempotency_records_survive_reopen_and_reject_conflicts(tmp_path, store
 
 
 # Workflow tests
+
+
+def test_submission_generates_distinct_job_ids_and_forwards_correlation(store_factory):
+    """The workflow assigns job IDs and forwards the HTTP correlation ID separately."""
+    class RecordingProcessor:
+        def __init__(self):
+            self.calls = []
+
+        def process(self, request_id, question, *, correlation_id=None):
+            self.calls.append((request_id, question, correlation_id))
+            return _result(request_id)
+
+    store = store_factory(":memory:")
+    processor = RecordingProcessor()
+    workflow = QuestionWorkflow(store, processor)
+
+    first = workflow.submit_question("What is RAG?", correlation_id="http-request")
+    second = workflow.submit_question("What is RAG?", correlation_id="http-request")
+
+    assert str(UUID(first.request_id, version=4)) == first.request_id
+    assert str(UUID(second.request_id, version=4)) == second.request_id
+    assert first.request_id != second.request_id
+    assert processor.calls == [
+        (first.request_id, "What is RAG?", "http-request"),
+        (second.request_id, "What is RAG?", "http-request"),
+    ]
+    assert store.get_job(first.request_id).result == first
+    assert store.get_job(second.request_id).result == second
+
+
+def test_submission_reuses_idempotent_result_without_reprocessing(store_factory):
+    """A repeated key returns the original job even though a new ID was generated."""
+    class RecordingProcessor:
+        def __init__(self):
+            self.calls = 0
+
+        def process(self, request_id, question, *, correlation_id=None):
+            self.calls += 1
+            return _result(request_id)
+
+    processor = RecordingProcessor()
+    workflow = QuestionWorkflow(store_factory(":memory:"), processor)
+
+    first = workflow.submit_question("Question", idempotency_key=" key ")
+    retry = workflow.submit_question("Question", idempotency_key="key")
+    with pytest.raises(IdempotencyKeyReuseError):
+        workflow.submit_question("Different", idempotency_key="key")
+
+    assert retry == first
+    assert processor.calls == 1
+
+
+@pytest.mark.parametrize("job_status", ["pending", "completed"])
+def test_submission_rejects_incomplete_cached_job(store_factory, job_status):
+    """Incomplete saved jobs yield the same safe, pollable processing error."""
+    store = store_factory(":memory:")
+    store._insert_job(
+        QuestionJob(request_id="existing-job", status=job_status),
+        idempotency_key_hash=hashlib.sha256(b"key").hexdigest(),
+        request_fingerprint=hashlib.sha256(b"Question").hexdigest(),
+    )
+    workflow = QuestionWorkflow(store)
+    with pytest.raises(QuestionProcessingError) as error:
+        workflow.submit_question("Question", idempotency_key="key")
+
+    assert error.value.request_id == "existing-job"
+    assert error.value.exception_type == "PreviousAttemptIncomplete"
+
+
+@pytest.mark.parametrize("processor_fails", [False, True])
+def test_submission_reuses_winning_job_after_idempotency_race(store_factory, processor_fails):
+    """A job inserted after the initial lookup wins over either processing outcome."""
+    class RacingStore(SQLiteQuestionJobStore):
+        def get_by_idempotency_key(self, idempotency_key_hash):
+            return None
+
+    class Processor:
+        def process(self, request_id, question, *, correlation_id=None):
+            if processor_fails:
+                raise TimeoutError("provider failure")
+            return _result(request_id)
+
+    store = store_factory(store_type=RacingStore)
+    original = _result("winner")
+    store.create_completed_job(
+        "winner", original,
+        idempotency_key_hash=hashlib.sha256(b"key").hexdigest(),
+        request_fingerprint=hashlib.sha256(b"Question").hexdigest(),
+    )
+    workflow = QuestionWorkflow(store, Processor())
+
+    assert workflow.submit_question("Question", idempotency_key="key") == original
+    assert store.get_job("winner").result == original
+
+
+def test_submission_persists_failed_job_with_generated_id(store_factory):
+    """The ID exposed on a processing failure identifies the persisted failed job."""
+    class FailingProcessor:
+        def process(self, request_id, question, *, correlation_id=None):
+            raise TimeoutError("sensitive provider details")
+
+    store = store_factory(":memory:")
+    workflow = QuestionWorkflow(store, FailingProcessor())
+    with pytest.raises(QuestionProcessingError) as error:
+        workflow.submit_question("Question", correlation_id="http-request")
+
+    assert str(UUID(error.value.request_id, version=4)) == error.value.request_id
+    assert error.value.exception_type == "TimeoutError"
+    assert error.value.__context__ is None
+    assert store.get_job(error.value.request_id).status == "failed"
 
 
 def test_workflow_completes_job_with_placeholder_result(store_factory):

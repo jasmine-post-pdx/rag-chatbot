@@ -1,6 +1,7 @@
 """Coordinate question processing with question job persistence."""
 
 import hashlib
+from uuid import uuid4
 
 from app.models.questions import QuestionJob, QuestionResult
 from app.services.question_processor import (
@@ -34,6 +35,25 @@ class QuestionWorkflow:
     def __init__(self, store: QuestionJobStore, processor: QuestionProcessor | None = None):
         self._store = store
         self._processor = processor or PlaceholderQuestionProcessor()
+
+    def submit_question(
+        self,
+        question: str,
+        *,
+        correlation_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> QuestionResult:
+        """Assign a job ID and process the question synchronously.
+
+        The optional correlation ID identifies the HTTP request independently of
+        the job ID; an idempotency key can reuse a previously persisted job.
+        """
+        return self.submit(
+            str(uuid4()),
+            question,
+            correlation_id=correlation_id,
+            idempotency_key=idempotency_key,
+        )
 
     def submit(
         self,

@@ -31,10 +31,10 @@ application structure so each part of the pipeline can evolve independently:
 - `app/config/settings.py` centralizes settings loaded from environment variables
   and an optional `.env` file. It keeps environment-specific values out of the
   source code; `app/config/logging.py` configures application logging.
-- `app/services/question_workflow.py` coordinates job creation, answer
-  processing, and persistence. The processor interface and placeholder live in
-  `app/services/question_processor.py`; the `QuestionJobStore` interface and
-  SQLite implementation live under `app/stores/`. Completed and failed jobs
+- `app/services/question_workflow.py` assigns job IDs and coordinates idempotency,
+  answer processing, and persistence. The processor interface and placeholder
+  live in `app/services/question_processor.py`; the `QuestionJobStore` interface
+  and SQLite implementation live under `app/stores/`. Completed and failed jobs
   survive restarts and can be retrieved through the status endpoint.
 - `app/retrieval/` will own chunking, indexing, search, ranking, and context
   assembly once the retrieval adapters are added.

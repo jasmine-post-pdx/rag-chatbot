@@ -1,10 +1,12 @@
 """In-process tests for the public HTTP API."""
 
+import hashlib
 import logging
 
 import pytest
 
 from app.api import main
+from app.models.questions import QuestionJob
 from app.services.question_workflow import QuestionWorkflow
 from app.stores.questions import SQLiteQuestionJobStore
 
@@ -134,6 +136,39 @@ def test_idempotent_failed_submission_reuses_failed_job(client, store_factory):
     assert job.error_category == "processing_error"
 
 
+@pytest.mark.parametrize("job_status", ["pending", "completed"])
+def test_idempotent_incomplete_submission_returns_original_question_id(
+    client, question_store, job_status
+):
+    """An incomplete persisted job remains pollable and yields a safe error on retry."""
+    question_store._insert_job(
+        QuestionJob(request_id="incomplete-job", status=job_status),
+        idempotency_key_hash=hashlib.sha256(b"key").hexdigest(),
+        request_fingerprint=hashlib.sha256(b"Help").hexdigest(),
+    )
+    response = client.post(
+        "/v1/questions", json={"question": "Help"}, headers={"Idempotency-Key": "key"}
+    )
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Internal server error"}
+    assert response.headers["x-question-id"] == "incomplete-job"
+    poll = client.get("/v1/questions/incomplete-job")
+    assert poll.status_code == 200
+    assert poll.json()["status"] == job_status
+    assert poll.json()["result"] is None
+
+
+@pytest.mark.parametrize("key", ["", " ", "x" * 256])
+def test_submit_rejects_invalid_idempotency_key(client, key):
+    """The HTTP layer retains validation for empty, blank, and oversized keys."""
+    response = client.post(
+        "/v1/questions", json={"question": "Help"}, headers={"Idempotency-Key": key}
+    )
+
+    assert response.status_code == 422
+
+
 def test_submit_trims_whitespace_from_question(client):
     """Verify leading and trailing whitespace is stripped from the question."""
     response = client.post("/v1/questions", json={"question": "  What is RAG?  "})
@@ -246,6 +281,24 @@ def test_poll_unknown_question_is_404(client):
     response = client.get("/v1/questions/missing")
     assert response.status_code == 404
     assert response.json() == {"detail": "Question not found"}
+
+
+@pytest.mark.parametrize("result", [None, {"answer": 123}])
+def test_submit_missing_or_malformed_result_returns_generic_500(client, store_factory, result):
+    """A broken workflow result is treated as a server error, not a client error."""
+    class BadResponseQuestionWorkflow(QuestionWorkflow):
+        def submit_question(self, question, *, correlation_id=None, idempotency_key=None):
+            return result
+
+    workflow = BadResponseQuestionWorkflow(store_factory())
+    main.app.dependency_overrides[main.get_question_workflow] = lambda: workflow
+    response = client.post(
+        "/v1/questions", json={"question": "Help"}, headers={"x-request-id": "test-request"}
+    )
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Internal server error"}
+    assert response.headers["x-request-id"] == "test-request"
 
 
 def test_invalid_server_response_data_returns_500(client, store_factory):

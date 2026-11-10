@@ -3,7 +3,6 @@
 import logging
 from contextlib import asynccontextmanager
 from typing import Annotated
-from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
@@ -267,10 +266,8 @@ def submit_question(
                 detail="Idempotency-Key must not be blank",
             )
 
-    request_id = str(uuid4())
     try:
-        return question_workflow.submit(
-            request_id,
+        return question_workflow.submit_question(
             request.question,
             correlation_id=http_request.state.request_id,
             idempotency_key=idempotency_key,

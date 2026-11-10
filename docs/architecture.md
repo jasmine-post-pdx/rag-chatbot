@@ -20,7 +20,7 @@ client
 | --- | --- |
 | `app/api/` | Health and readiness checks, synchronous question submission, job status responses, validation, and request correlation. |
 | `app/config/` | Environment-based settings and standard-library logging configuration. |
-| `app/services/question_workflow.py` | Coordinates job creation, answer processing, and success or failure persistence. |
+| `app/services/question_workflow.py` | Generates job IDs, coordinates answer processing, idempotency, and success or failure persistence. |
 | `app/services/question_processor.py` | Processor interface and placeholder implementation; the answerer also supports a configured model provider. |
 | `app/stores/` | Job-store interface and SQLite-backed implementation. |
 | `scripts/question_job_maintenance.py` | SQLite snapshots, tiered backup rotation, and terminal-job archiving. |
@@ -31,12 +31,14 @@ client
 The FastAPI application lifespan creates, verifies, and owns the SQLite store,
 injects it into the workflow, and closes it on shutdown or failed startup after
 creation. The workflow is shared with routes through dependency injection. Question
-submission processes the question, then persists and returns its terminal job
-in one request; in-flight work is not stored. Processing failures are persisted
-as failed jobs with a safe error category; the submit request still returns a
-generic server error. The store serializes jobs as JSON in SQLite, preserves
-older two-column job tables when adding maintenance and idempotency metadata,
-and checks readiness by querying the job table. The optional Compose pgvector
+submission assigns a job ID, checks any idempotency key, processes the question,
+then persists and returns its terminal result in one request; in-flight work is
+not stored. The HTTP correlation ID is passed independently to the processor.
+Processing failures are persisted as failed jobs with a safe error category; the
+submit request still returns a generic server error. The store serializes jobs as
+JSON in SQLite, preserves older two-column job tables when adding maintenance and
+idempotency metadata, and checks readiness with
+`SELECT request_id FROM question_jobs LIMIT 1`. The optional Compose pgvector
 service is not connected to the application.
 The maintenance command keeps 30 days of jobs live, archives older terminal
 jobs, and expires archived rows after the configured archive period.
