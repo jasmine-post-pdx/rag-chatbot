@@ -410,9 +410,11 @@ Run the automated tests from the project root:
 pytest
 ```
 
-The real OpenAI Responses API smoke test is skipped by default. To opt in,
-configure `OPENAI_API_KEY` and `OPENAI_SMOKE_MODEL` in the environment or
-`.env`, then run:
+The default `pytest` command excludes the `openai_smoke` marker, so it does
+not call the real provider even when `RUN_OPENAI_SMOKE=1` is set. The smoke
+test also skips unless that variable is set. To opt in, configure
+`OPENAI_API_KEY` and `OPENAI_SMOKE_MODEL` in the environment or `.env`, then
+run:
 
 ```bash
 RUN_OPENAI_SMOKE=1 pytest -m openai_smoke

@@ -234,6 +234,77 @@ def test_processor_satisfies_question_processor_interface(store_factory):
     assert job.result == result
 
 
+@pytest.mark.parametrize(
+    ("error_type", "expected_category"),
+    [
+        (type("APITimeoutError", (TimeoutError,), {}), "provider_timeout"),
+        (type("RequestTimeout", (Exception,), {}), "provider_timeout"),
+        (type("RateLimitError", (Exception,), {}), "provider_rate_limit"),
+        (type("Rate_LimitError", (Exception,), {}), "provider_rate_limit"),
+        (type("AuthenticationError", (Exception,), {}), "provider_authentication"),
+        (type("PermissionDeniedError", (Exception,), {}), "provider_authentication"),
+        (type("BadRequestError", (Exception,), {}), "provider_error"),
+    ],
+    ids=[
+        "api-timeout",
+        "timeout-name",
+        "rate-limit",
+        "rate-limit-underscore",
+        "authentication",
+        "permission",
+        "bad-request",
+    ],
+)
+def test_workflow_logs_failure_class_and_persists_processing_error(
+    store_factory, caplog, error_type, expected_category
+):
+    """Log the provider failure class and store the public processing error.
+
+    Args:
+        store_factory: Fixture that creates a SQLite job store.
+        caplog: Pytest fixture used to capture structured log records.
+        error_type: Exception class raised by the fake provider client.
+        expected_category: Log category expected for that exception class.
+    """
+
+    class ClassifiedFailureClient:
+        """Raise one named provider failure without revealing the question."""
+
+        provider = "openai"
+        model = "gpt-test"
+
+        def generate(self, question: str) -> GenerationResult:
+            """Raise the parametrized provider error, including the prompt."""
+            raise error_type(f"Rejected question: {question}")
+
+    caplog.set_level(logging.ERROR, logger="app.services.question_processor")
+    workflow = QuestionWorkflow(
+        store_factory(":memory:"),
+        LLMQuestionProcessor(ClassifiedFailureClient()),
+        question_id_factory=lambda: "req-1",
+    )
+
+    with pytest.raises(QuestionProcessingError) as raised:
+        workflow.submit_question("private prompt text", request_id="http-request-1")
+
+    assert raised.value.exception_type == error_type.__name__
+    job = workflow.get_job("req-1")
+    assert job is not None
+    assert job.status == "failed"
+    assert job.error_category == "processing_error"
+    record = next(
+        record
+        for record in caplog.records
+        if record.name == "app.services.question_processor"
+        and record.message.startswith("Generation failed:")
+    )
+    assert record.error_category == expected_category
+    assert record.exception_type == error_type.__name__
+    assert record.request_id == "http-request-1"
+    assert record.question_id == "req-1"
+    assert "private prompt text" not in record.message
+
+
 def test_workflow_marks_job_failed_when_processor_client_fails(store_factory):
     """Verify client failures through the processor are persisted as failed jobs."""
     workflow = QuestionWorkflow(
