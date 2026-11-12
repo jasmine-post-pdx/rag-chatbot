@@ -1,7 +1,8 @@
 # Other API sequence diagrams
 
 These are the health routes in `app/routers/health.py`: `/health` and
-`/ready`. Both requests pass through the request logging middleware.
+`/ready`. Both requests pass through `app/middleware.py`; `/ready` obtains the
+shared workflow through `app/dependencies/questions.py`.
 
 ## Text preview
 
@@ -34,7 +35,8 @@ Client          Middleware       FastAPI route       Workflow       SQLite store
 sequenceDiagram
     actor Client
     participant MW as RequestLogMiddleware
-    participant API as FastAPI route
+    participant API as Health router
+    participant Dep as Workflow dependency
     participant WF as QuestionWorkflow
     participant Store as SQLiteQuestionJobStore
     participant DB as SQLite database
@@ -48,7 +50,10 @@ sequenceDiagram
 
     Note over Client,DB: GET /ready
     Client->>MW: GET /ready
+    MW->>MW: Create/normalize x-request-id
     MW->>API: Forward request
+    API->>Dep: get_question_workflow(request)
+    Dep-->>API: Shared workflow from app state
     API->>WF: is_ready()
     WF->>Store: is_ready()
     Store->>DB: SELECT request_id FROM question_jobs LIMIT 1
