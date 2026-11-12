@@ -1,5 +1,6 @@
 """Unit tests for provider-neutral generation models and interfaces."""
 
+import logging
 import sys
 from types import ModuleType, SimpleNamespace
 
@@ -249,3 +250,171 @@ def test_openai_client_configures_sdk_timeout_without_sdk_retries(monkeypatch):
     assert constructed_clients == [
         {"api_key": "test-key", "timeout": 12.5, "max_retries": 0}
     ]
+
+
+class _StatusFailure(Exception):
+    """Provider error carrying an HTTP status code."""
+
+    def __init__(self, status_code: int) -> None:
+        """Store the status code used by the retry policy.
+
+        Args:
+            status_code: HTTP status reported by the provider.
+        """
+        super().__init__(f"status {status_code}")
+        self.status_code = status_code
+
+
+class _ScriptedResponses:
+    """Return or raise scripted Responses API outcomes in order."""
+
+    def __init__(self, outcomes: list[object]) -> None:
+        """Store the outcomes and start with no recorded calls.
+
+        Args:
+            outcomes: Response objects or exceptions, consumed one per call.
+        """
+        self._outcomes = list(outcomes)
+        self.calls: list[dict] = []
+
+    def create(self, **kwargs):
+        """Record the call and return or raise the next outcome."""
+        self.calls.append(kwargs)
+        outcome = self._outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+def _completed_response():
+    """Return a successful Responses API object with reported usage."""
+    return SimpleNamespace(
+        output_text="An OpenAI answer",
+        model="gpt-test-2026",
+        usage=SimpleNamespace(input_tokens=7, output_tokens=9),
+        status="completed",
+        id="resp_ok",
+        output=[],
+    )
+
+
+def _retrying_client(responses: _ScriptedResponses, max_retries: int = 2):
+    """Build a client whose retries record delays instead of sleeping.
+
+    Args:
+        responses: Scripted Responses endpoint.
+        max_retries: Extra attempts allowed after the first request.
+
+    Returns:
+        The client and the list of recorded backoff delays.
+    """
+    delays: list[float] = []
+    client = OpenAIResponsesClient(
+        "gpt-test",
+        client=SimpleNamespace(responses=responses),
+        max_retries=max_retries,
+        sleeper=delays.append,
+        rng=lambda: 1.0,
+    )
+    return client, delays
+
+
+def test_openai_client_retries_rate_limit_then_returns_success():
+    """Retry HTTP 429 once, then map the successful response."""
+    responses = _ScriptedResponses([_StatusFailure(429), _completed_response()])
+    client, delays = _retrying_client(responses)
+
+    result = client.generate("What is RAG?")
+
+    assert result.answer == "An OpenAI answer"
+    assert len(responses.calls) == 2
+    assert delays == [0.5]
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        _StatusFailure(500),
+        _StatusFailure(502),
+        _StatusFailure(503),
+        _StatusFailure(504),
+        TimeoutError("timed out"),
+        ConnectionError("connection reset"),
+    ],
+)
+def test_openai_client_retries_transient_and_transport_failures(failure):
+    """Retry selected server errors, timeouts, and connection failures.
+
+    Args:
+        failure: Retryable error raised by the first provider call.
+    """
+    responses = _ScriptedResponses([failure, _completed_response()])
+    client, delays = _retrying_client(responses)
+
+    result = client.generate("What is RAG?")
+
+    assert result.provider_request_id == "resp_ok"
+    assert len(responses.calls) == 2
+    assert delays == [0.5]
+
+
+@pytest.mark.parametrize("status_code", [400, 401, 403, 404, 422, 501])
+def test_openai_client_does_not_retry_client_or_unselected_errors(status_code):
+    """Leave authentication, bad requests, and unselected statuses unretried.
+
+    Args:
+        status_code: Provider status that must fail on the first attempt.
+    """
+    responses = _ScriptedResponses([_StatusFailure(status_code), _completed_response()])
+    client, delays = _retrying_client(responses)
+
+    with pytest.raises(_StatusFailure, match=f"status {status_code}"):
+        client.generate("What is RAG?")
+
+    assert len(responses.calls) == 1
+    assert delays == []
+
+
+def test_openai_client_stops_at_the_retry_limit():
+    """Make one initial request plus the configured number of extra attempts."""
+    responses = _ScriptedResponses([_StatusFailure(429)] * 4)
+    client, delays = _retrying_client(responses, max_retries=2)
+
+    with pytest.raises(_StatusFailure, match="status 429"):
+        client.generate("What is RAG?")
+
+    assert len(responses.calls) == 3
+    assert delays == [0.5, 1.0]
+
+
+def test_openai_client_makes_one_attempt_when_retries_are_disabled():
+    """Do not retry when the retry allowance is zero."""
+    responses = _ScriptedResponses([TimeoutError("timed out"), _completed_response()])
+    client, delays = _retrying_client(responses, max_retries=0)
+
+    with pytest.raises(TimeoutError, match="timed out"):
+        client.generate("What is RAG?")
+
+    assert len(responses.calls) == 1
+    assert delays == []
+
+
+def test_openai_client_caps_backoff_and_omits_the_question_from_retry_logs(caplog):
+    """Cap backoff at eight seconds and keep the question out of retry logs.
+
+    Args:
+        caplog: Pytest fixture used to capture structured log records.
+    """
+    responses = _ScriptedResponses([_StatusFailure(503)] * 7)
+    client, delays = _retrying_client(responses, max_retries=6)
+    caplog.set_level(logging.WARNING, logger="app.llm.generation")
+
+    with pytest.raises(_StatusFailure):
+        client.generate("private prompt text")
+
+    assert delays == [0.5, 1.0, 2.0, 4.0, 8.0, 8.0]
+    assert "private prompt text" not in caplog.text
+    retry_logs = [record for record in caplog.records if record.message == "Retrying generation"]
+    assert [record.attempt for record in retry_logs] == [1, 2, 3, 4, 5, 6]
+    assert {record.provider_status for record in retry_logs} == {503}
+    assert {record.exception_type for record in retry_logs} == {"_StatusFailure"}

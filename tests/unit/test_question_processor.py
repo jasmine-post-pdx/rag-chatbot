@@ -36,12 +36,14 @@ def test_openai_provider_receives_generation_request_settings(monkeypatch):
         timeout_seconds=12.5,
         max_output_tokens=256,
         instructions="Be concise.",
+        max_retries=4,
     )
 
     client = processor._client
     assert client._timeout_seconds == 12.5
     assert client._max_output_tokens == 256
     assert client._instructions == "Be concise."
+    assert client._max_retries == 4
 
 
 @pytest.mark.parametrize("provider", ["anthropic", "", "OpenAI"])

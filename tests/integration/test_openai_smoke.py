@@ -39,6 +39,7 @@ def test_openai_responses_api_smoke():
         timeout_seconds=settings.generation_timeout_seconds,
         max_output_tokens=settings.generation_max_output_tokens,
         instructions=settings.generation_instructions,
+        max_retries=settings.generation_max_retries,
     )
     result = client.generate("Reply with a short greeting.")
 

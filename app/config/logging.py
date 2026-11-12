@@ -37,6 +37,8 @@ class RequestFormatter(logging.Formatter):
         "output_tokens",
         "finish_status",
         "provider_request_id",
+        "attempt",
+        "provider_status",
         "error_category",
         "exception_type",
     ]

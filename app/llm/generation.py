@@ -1,8 +1,19 @@
 """Provider-neutral interfaces and models for text generation."""
 
+import logging
+import random
+import time
+from collections.abc import Callable
 from typing import Protocol
 
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
+
+# Rate limits and selected server errors. Other 4xx responses are not retried.
+_RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
+_BACKOFF_BASE_SECONDS = 0.5
+_BACKOFF_MAX_SECONDS = 8.0
 
 
 class GenerationResult(BaseModel):
@@ -94,8 +105,11 @@ class OpenAIResponsesClient:
     The SDK client is created on first use, so the application can start
     without ``OPENAI_API_KEY`` and only fails when generation is attempted.
 
-    SDK retries are disabled. Request retries belong to the application so
-    they are not stacked on top of the SDK's own retries.
+    SDK retries are disabled. This client retries rate limits, selected 5xx
+    responses, and timeout or connection failures. Authentication failures and
+    bad requests are not retried. ``responses.create`` is not idempotent, so a
+    retry can run and bill a second generation when an earlier request reached
+    the provider.
 
     Attributes:
         _client: SDK client used to make Responses API requests, if created.
@@ -103,6 +117,9 @@ class OpenAIResponsesClient:
         _timeout_seconds: Per-request timeout used when creating the SDK client.
         _max_output_tokens: Optional completion-token cap sent on each request.
         _instructions: Optional instructions sent separately from the question.
+        _max_retries: Extra attempts after the first request.
+        _sleeper: Called with the backoff delay before each retry.
+        _rng: Returns a jitter factor in the range 0 to 1.
     """
 
     def __init__(
@@ -114,6 +131,9 @@ class OpenAIResponsesClient:
         timeout_seconds: float = 30.0,
         max_output_tokens: int | None = None,
         instructions: str | None = None,
+        max_retries: int = 2,
+        sleeper: Callable[[float], None] = time.sleep,
+        rng: Callable[[], float] = random.random,
     ) -> None:
         """Initialize the adapter with a model and optional SDK client.
 
@@ -127,13 +147,25 @@ class OpenAIResponsesClient:
                 request when ``None``.
             instructions: Optional instructions sent separately from the
                 question. Omitted from the request when ``None``.
+            max_retries: Extra attempts after the first request. Zero disables
+                application retries.
+            sleeper: Wait function used between retries. Tests can replace it.
+            rng: Jitter source used for backoff. Tests can replace it.
+
+        Raises:
+            ValueError: If ``max_retries`` is negative.
         """
+        if max_retries < 0:
+            raise ValueError("max_retries must be zero or greater")
         self._client = client
         self._model = model
         self._api_key = api_key
         self._timeout_seconds = timeout_seconds
         self._max_output_tokens = max_output_tokens
         self._instructions = instructions
+        self._max_retries = max_retries
+        self._sleeper = sleeper
+        self._rng = rng
         self.provider = "openai"
         self.model = model
 
@@ -189,22 +221,87 @@ class OpenAIResponsesClient:
 
         Raises:
             MissingAPIKeyError: If ``OPENAI_API_KEY`` is not set.
+            Exception: The provider error from the final attempt. Retryable
+                failures are retried up to ``max_retries`` extra times.
         """
-        response = self._get_client().responses.create(**self._request_body(question))
-        refusal = _refusal_text(response)
-        reported_model = getattr(response, "model", None)
-        if not isinstance(reported_model, str) or reported_model == "":
-            reported_model = self._model
-        return GenerationResult(
-            answer=_answer_text(response, refusal),
-            provider="openai",
-            model=reported_model,
-            input_tokens=_reported_token_count(getattr(response, "usage", None), "input_tokens"),
-            output_tokens=_reported_token_count(getattr(response, "usage", None), "output_tokens"),
-            finish_status=_finish_status(response),
-            refusal=refusal,
-            provider_request_id=_provider_request_id(response),
-        )
+        client = self._get_client()
+        body = self._request_body(question)
+        for attempt in range(self._max_retries + 1):
+            try:
+                response = client.responses.create(**body)
+            except Exception as exc:
+                if not _is_retryable(exc) or attempt >= self._max_retries:
+                    raise
+                logger.warning(
+                    "Retrying generation",
+                    extra={
+                        "provider": self.provider,
+                        "model": self.model,
+                        "attempt": attempt + 1,
+                        "provider_status": getattr(exc, "status_code", None),
+                        "exception_type": type(exc).__name__,
+                    },
+                )
+                self._sleeper(_retry_delay_seconds(attempt, self._rng()))
+                continue
+            return _generation_result(response, self._model)
+        raise RuntimeError("generation retry loop ended without a result")
+
+
+def _generation_result(response: object, fallback_model: str) -> GenerationResult:
+    """Map a Responses API response without inventing omitted metadata."""
+    refusal = _refusal_text(response)
+    reported_model = getattr(response, "model", None)
+    if not isinstance(reported_model, str) or reported_model == "":
+        reported_model = fallback_model
+    return GenerationResult(
+        answer=_answer_text(response, refusal),
+        provider="openai",
+        model=reported_model,
+        input_tokens=_reported_token_count(getattr(response, "usage", None), "input_tokens"),
+        output_tokens=_reported_token_count(getattr(response, "usage", None), "output_tokens"),
+        finish_status=_finish_status(response),
+        refusal=refusal,
+        provider_request_id=_provider_request_id(response),
+    )
+
+
+def _is_retryable(exc: Exception) -> bool:
+    """Return whether this failure is safe to retry.
+
+    Rate limits, selected 5xx responses, timeouts, and connection failures are
+    retried. Authentication failures, bad requests, and other client errors
+    are not.
+
+    Args:
+        exc: Error raised by one generation attempt.
+
+    Returns:
+        ``True`` when another attempt is allowed.
+    """
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return True
+    status_code = getattr(exc, "status_code", None)
+    if isinstance(status_code, int) and status_code in _RETRYABLE_STATUS_CODES:
+        return True
+    name = type(exc).__name__.lower()
+    return "timeout" in name or "connection" in name
+
+
+def _retry_delay_seconds(failed_attempt: int, jitter: float) -> float:
+    """Return an exponential backoff delay with jitter.
+
+    Args:
+        failed_attempt: Zero for the delay after the first failure.
+        jitter: Factor from 0 through 1 applied to the delay ceiling.
+
+    Returns:
+        Seconds to wait before the next attempt. The ceiling doubles from
+        half a second and stops growing at eight seconds.
+    """
+    bounded_jitter = min(1.0, max(0.0, jitter))
+    ceiling = min(_BACKOFF_MAX_SECONDS, _BACKOFF_BASE_SECONDS * (2**failed_attempt))
+    return ceiling * bounded_jitter
 
 
 def _reported_token_count(usage: object | None, name: str) -> int | None:

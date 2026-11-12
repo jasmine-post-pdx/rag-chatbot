@@ -132,9 +132,13 @@ Local runs load all of these settings from environment variables or `.env`.
 The OpenAI adapter uses `GENERATION_TIMEOUT_SECONDS` (default `30`) as its
 client timeout. It sends `GENERATION_INSTRUCTIONS` and
 `GENERATION_MAX_OUTPUT_TOKENS` when they are set, and omits each one when it
-is unset. The SDK client is created with `max_retries=0`.
-`GENERATION_MAX_RETRIES` (default `2`) is the application retry allowance and
-is not applied by the SDK.
+is unset. The SDK client is created with `max_retries=0`. The application
+retries HTTP 429, 500, 502, 503, and 504, plus timeout and connection
+failures, using exponential backoff with jitter. It does not retry
+authentication failures or bad requests. `GENERATION_MAX_RETRIES` (default
+`2`) is the number of extra attempts. Each extra attempt is a new Responses
+API create. That call is not idempotent, so a retry can bill another
+generation when an earlier request reached the provider.
 
 Docker Compose sets `QUESTIONS_DB_PATH` to `/app/data/questions.db` and forwards
 the archive directory, backup directory, live and archive retention, and

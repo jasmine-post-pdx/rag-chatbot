@@ -47,6 +47,7 @@ async def lifespan(app: FastAPI) -> None:
         timeout_seconds=settings.generation_timeout_seconds,
         max_output_tokens=settings.generation_max_output_tokens,
         instructions=settings.generation_instructions,
+        max_retries=settings.generation_max_retries,
     )
     store = SQLiteQuestionJobStore(db_path=str(settings.questions_db_path))
     try:

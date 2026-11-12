@@ -153,6 +153,7 @@ def build_question_processor(
     timeout_seconds: float = 30.0,
     max_output_tokens: int | None = None,
     instructions: str | None = None,
+    max_retries: int = 2,
 ) -> QuestionProcessor:
     """Return the question processor for a generation provider.
 
@@ -163,6 +164,8 @@ def build_question_processor(
         timeout_seconds: Per-request timeout for the OpenAI client.
         max_output_tokens: Optional completion-token cap for the OpenAI client.
         instructions: Optional instructions sent separately from the question.
+        max_retries: Extra OpenAI attempts after rate limits, selected server
+            errors, and transport failures.
 
     Returns:
         The placeholder processor for ``"local"``, or an LLM-backed processor.
@@ -180,6 +183,7 @@ def build_question_processor(
                 timeout_seconds=timeout_seconds,
                 max_output_tokens=max_output_tokens,
                 instructions=instructions,
+                max_retries=max_retries,
             )
         )
     raise UnknownGenerationProviderError(
