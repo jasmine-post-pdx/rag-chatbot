@@ -26,6 +26,24 @@ def test_openai_provider_uses_llm_processor_without_requiring_api_key(monkeypatc
     assert isinstance(processor, LLMQuestionProcessor)
 
 
+def test_openai_provider_receives_generation_request_settings(monkeypatch):
+    """Pass timeout, output cap, and instructions through to the OpenAI client."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    processor = build_question_processor(
+        "openai",
+        "gpt-test",
+        timeout_seconds=12.5,
+        max_output_tokens=256,
+        instructions="Be concise.",
+    )
+
+    client = processor._client
+    assert client._timeout_seconds == 12.5
+    assert client._max_output_tokens == 256
+    assert client._instructions == "Be concise."
+
+
 @pytest.mark.parametrize("provider", ["anthropic", "", "OpenAI"])
 def test_unknown_provider_raises(provider):
     """Reject providers without a matching processor.

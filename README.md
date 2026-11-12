@@ -129,10 +129,12 @@ OPENAI_API_KEY=your-key-here
 Do not commit real credentials to the repository.
 
 Local runs load all of these settings from environment variables or `.env`.
-Generation client settings are `GENERATION_TIMEOUT_SECONDS` (default `30`),
-`GENERATION_MAX_RETRIES` (default `2` extra attempts), optional
-`GENERATION_MAX_OUTPUT_TOKENS`, and optional `GENERATION_INSTRUCTIONS`. Leave
-the optional values unset for no output cap and no extra instructions.
+The OpenAI adapter uses `GENERATION_TIMEOUT_SECONDS` (default `30`) as its
+client timeout. It sends `GENERATION_INSTRUCTIONS` and
+`GENERATION_MAX_OUTPUT_TOKENS` when they are set, and omits each one when it
+is unset. The SDK client is created with `max_retries=0`.
+`GENERATION_MAX_RETRIES` (default `2`) is the application retry allowance and
+is not applied by the SDK.
 
 Docker Compose sets `QUESTIONS_DB_PATH` to `/app/data/questions.db` and forwards
 the archive directory, backup directory, live and archive retention, and

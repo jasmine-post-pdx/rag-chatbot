@@ -44,6 +44,9 @@ async def lifespan(app: FastAPI) -> None:
         settings.openai_api_key.get_secret_value()
         if settings.openai_api_key is not None
         else None,
+        timeout_seconds=settings.generation_timeout_seconds,
+        max_output_tokens=settings.generation_max_output_tokens,
+        instructions=settings.generation_instructions,
     )
     store = SQLiteQuestionJobStore(db_path=str(settings.questions_db_path))
     try:

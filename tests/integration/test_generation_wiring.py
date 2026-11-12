@@ -62,7 +62,7 @@ def test_fake_llm_processor_returns_and_persists_api_result(
     monkeypatch.setattr(
         main,
         "build_question_processor",
-        lambda provider, model, openai_api_key=None: LLMQuestionProcessor(
+        lambda provider, model, openai_api_key=None, **_kwargs: LLMQuestionProcessor(
             FakeLLMClient(model=model)
         ),
     )

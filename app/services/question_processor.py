@@ -144,7 +144,13 @@ class UnknownGenerationProviderError(ValueError):
 
 
 def build_question_processor(
-    provider: str, model: str, openai_api_key: str | None = None
+    provider: str,
+    model: str,
+    openai_api_key: str | None = None,
+    *,
+    timeout_seconds: float = 30.0,
+    max_output_tokens: int | None = None,
+    instructions: str | None = None,
 ) -> QuestionProcessor:
     """Return the question processor for a generation provider.
 
@@ -152,6 +158,9 @@ def build_question_processor(
         provider: Generation provider name, such as ``"local"`` or ``"openai"``.
         model: Model identifier passed to provider-backed clients.
         openai_api_key: Optional OpenAI key supplied by application settings.
+        timeout_seconds: Per-request timeout for the OpenAI client.
+        max_output_tokens: Optional completion-token cap for the OpenAI client.
+        instructions: Optional instructions sent separately from the question.
 
     Returns:
         The placeholder processor for ``"local"``, or an LLM-backed processor.
@@ -162,7 +171,15 @@ def build_question_processor(
     if provider == "local":
         return PlaceholderQuestionProcessor()
     if provider == "openai":
-        return LLMQuestionProcessor(OpenAIResponsesClient(model, api_key=openai_api_key))
+        return LLMQuestionProcessor(
+            OpenAIResponsesClient(
+                model,
+                api_key=openai_api_key,
+                timeout_seconds=timeout_seconds,
+                max_output_tokens=max_output_tokens,
+                instructions=instructions,
+            )
+        )
     raise UnknownGenerationProviderError(
         f"Unknown GENERATION_PROVIDER {provider!r}; expected 'local' or 'openai'"
     )

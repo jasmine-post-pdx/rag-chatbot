@@ -85,22 +85,46 @@ class OpenAIResponsesClient:
     The SDK client is created on first use, so the application can start
     without ``OPENAI_API_KEY`` and only fails when generation is attempted.
 
+    SDK retries are disabled. Request retries belong to the application so
+    they are not stacked on top of the SDK's own retries.
+
     Attributes:
         _client: SDK client used to make Responses API requests, if created.
         _model: Model identifier passed to each request.
+        _timeout_seconds: Per-request timeout used when creating the SDK client.
+        _max_output_tokens: Optional completion-token cap sent on each request.
+        _instructions: Optional instructions sent separately from the question.
     """
 
-    def __init__(self, model: str, api_key: str | None = None, client=None) -> None:
+    def __init__(
+        self,
+        model: str,
+        api_key: str | None = None,
+        client=None,
+        *,
+        timeout_seconds: float = 30.0,
+        max_output_tokens: int | None = None,
+        instructions: str | None = None,
+    ) -> None:
         """Initialize the adapter with a model and optional SDK client.
 
         Args:
             model: OpenAI model identifier to use for requests.
             api_key: Optional key from application settings.
             client: Optional OpenAI SDK client, useful for isolated tests.
+            timeout_seconds: Per-request timeout in seconds for a client this
+                adapter creates. Ignored when ``client`` is injected.
+            max_output_tokens: Optional completion-token cap. Omitted from the
+                request when ``None``.
+            instructions: Optional instructions sent separately from the
+                question. Omitted from the request when ``None``.
         """
         self._client = client
         self._model = model
         self._api_key = api_key
+        self._timeout_seconds = timeout_seconds
+        self._max_output_tokens = max_output_tokens
+        self._instructions = instructions
         self.provider = "openai"
         self.model = model
 
@@ -123,10 +147,27 @@ class OpenAIResponsesClient:
 
             self._client = OpenAI(
                 api_key=self._api_key,
-                timeout=30.0,
-                max_retries=2,
+                timeout=self._timeout_seconds,
+                max_retries=0,
             )
         return self._client
+
+    def _request_body(self, question: str) -> dict[str, object]:
+        """Build the Responses API request from the question and client settings.
+
+        Args:
+            question: User question sent as the request input.
+
+        Returns:
+            Request fields. Instructions and the output cap are included only
+            when configured.
+        """
+        body: dict[str, object] = {"model": self._model, "input": question}
+        if self._instructions is not None:
+            body["instructions"] = self._instructions
+        if self._max_output_tokens is not None:
+            body["max_output_tokens"] = self._max_output_tokens
+        return body
 
     def generate(self, question: str) -> GenerationResult:
         """Generate an answer and return provider-reported token usage.
@@ -140,7 +181,7 @@ class OpenAIResponsesClient:
         Raises:
             MissingAPIKeyError: If ``OPENAI_API_KEY`` is not set.
         """
-        response = self._get_client().responses.create(model=self._model, input=question)
+        response = self._get_client().responses.create(**self._request_body(question))
         usage = response.usage
         return GenerationResult(
             answer=response.output_text,

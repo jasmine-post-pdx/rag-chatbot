@@ -139,8 +139,31 @@ def test_openai_client_maps_response_using_injected_sdk_client(monkeypatch):
     )
 
 
-def test_openai_client_configures_sdk_timeout_and_bounded_retries(monkeypatch):
-    """Configure the SDK with the chosen timeout and retry limit.
+def test_openai_client_sends_instructions_and_output_cap_when_configured():
+    """Send instructions and the output cap separately from the question."""
+    responses = _FakeResponses()
+    client = OpenAIResponsesClient(
+        "gpt-test",
+        client=SimpleNamespace(responses=responses),
+        timeout_seconds=12.5,
+        max_output_tokens=256,
+        instructions="Be concise.",
+    )
+
+    client.generate("What is RAG?")
+
+    assert responses.calls == [
+        {
+            "model": "gpt-test",
+            "input": "What is RAG?",
+            "instructions": "Be concise.",
+            "max_output_tokens": 256,
+        }
+    ]
+
+
+def test_openai_client_configures_sdk_timeout_without_sdk_retries(monkeypatch):
+    """Create the SDK client with the configured timeout and no SDK retries.
 
     Args:
         monkeypatch: Pytest fixture used to replace the OpenAI SDK constructor.
@@ -156,11 +179,13 @@ def test_openai_client_configures_sdk_timeout_and_bounded_retries(monkeypatch):
     openai_module = ModuleType("openai")
     openai_module.OpenAI = fake_openai
     monkeypatch.setitem(sys.modules, "openai", openai_module)
-    client = OpenAIResponsesClient("gpt-test", api_key="test-key")
+    client = OpenAIResponsesClient(
+        "gpt-test", api_key="test-key", timeout_seconds=12.5
+    )
 
     result = client.generate("What is RAG?")
 
     assert result.answer == "An OpenAI answer"
     assert constructed_clients == [
-        {"api_key": "test-key", "timeout": 30.0, "max_retries": 2}
+        {"api_key": "test-key", "timeout": 12.5, "max_retries": 0}
     ]
