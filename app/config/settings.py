@@ -30,6 +30,12 @@ class Settings(BaseSettings):
         embedding_model: Name or identifier of the embedding model.
         generation_provider: Adapter name for answer generation.
         generation_model: Name or identifier of the generation model.
+        generation_timeout_seconds: Per-request generation client timeout.
+        generation_max_retries: Extra attempts after a failed generation request.
+        generation_max_output_tokens: Optional completion-token cap. Unset means
+            no explicit cap.
+        generation_instructions: Optional instructions sent separately from the
+            question. Unset means no extra instructions.
         openai_api_key: Optional OpenAI API key loaded from the environment.
     """
 
@@ -61,7 +67,22 @@ class Settings(BaseSettings):
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     generation_provider: str = "local"
     generation_model: str = "stub"
+    generation_timeout_seconds: float = Field(default=30.0, gt=0)
+    generation_max_retries: int = Field(default=2, ge=0)
+    generation_max_output_tokens: int | None = Field(default=None, gt=0)
+    generation_instructions: str | None = None
     openai_api_key: SecretStr | None = None
+
+    @field_validator("generation_instructions", mode="before")
+    @classmethod
+    def strip_generation_instructions(cls, value: object) -> object:
+        """Reject a blank instructions value and strip surrounding whitespace."""
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                raise ValueError("GENERATION_INSTRUCTIONS must not be empty")
+            return stripped
+        return value
 
     @field_validator("openai_api_key", mode="before")
     @classmethod

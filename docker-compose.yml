@@ -4,6 +4,12 @@ services:
     image: rag-chatbot:local
     ports:
       - "8000:8000"
+    env_file:
+      # Forwards OPENAI_API_KEY, GENERATION_MAX_OUTPUT_TOKENS, and
+      # GENERATION_INSTRUCTIONS when the file defines them. Omitted so an
+      # unset key is not passed as an empty string, which settings reject.
+      - path: .env
+        required: false
     environment:
       QUESTIONS_DB_PATH: /app/data/questions.db
       QUESTIONS_ARCHIVE_DIR: ${QUESTIONS_ARCHIVE_DIR:-data/question_archives}
@@ -15,6 +21,10 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-raglab}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-raglab}
       POSTGRES_DB: ${POSTGRES_DB:-raglab}
+      GENERATION_PROVIDER: ${GENERATION_PROVIDER:-local}
+      GENERATION_MODEL: ${GENERATION_MODEL:-stub}
+      GENERATION_TIMEOUT_SECONDS: ${GENERATION_TIMEOUT_SECONDS:-30}
+      GENERATION_MAX_RETRIES: ${GENERATION_MAX_RETRIES:-2}
     volumes:
       - questions_data:/app/data
     restart: unless-stopped

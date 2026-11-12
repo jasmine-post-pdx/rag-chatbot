@@ -129,13 +129,22 @@ OPENAI_API_KEY=your-key-here
 Do not commit real credentials to the repository.
 
 Local runs load all of these settings from environment variables or `.env`.
+Generation client settings are `GENERATION_TIMEOUT_SECONDS` (default `30`),
+`GENERATION_MAX_RETRIES` (default `2` extra attempts), optional
+`GENERATION_MAX_OUTPUT_TOKENS`, and optional `GENERATION_INSTRUCTIONS`. Leave
+the optional values unset for no output cap and no extra instructions.
+
 Docker Compose sets `QUESTIONS_DB_PATH` to `/app/data/questions.db` and forwards
 the archive directory, backup directory, live and archive retention, and
 Postgres settings from the environment, using the same defaults as the
-application. `LOG_LEVEL`, `GENERATION_PROVIDER`, `GENERATION_MODEL`,
-`EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, and `OPENAI_API_KEY` stay at
-application defaults inside the container until they are added to the Compose
-service environment.
+application. It also forwards `GENERATION_PROVIDER`, `GENERATION_MODEL`,
+`GENERATION_TIMEOUT_SECONDS`, and `GENERATION_MAX_RETRIES`, again using the
+application defaults when those variables are unset. When a `.env` file is
+present, Compose loads it into the app container. That is how
+`OPENAI_API_KEY`, `GENERATION_MAX_OUTPUT_TOKENS`, and `GENERATION_INSTRUCTIONS`
+are forwarded without turning an unset value into an empty string.
+`LOG_LEVEL`, `EMBEDDING_PROVIDER`, and `EMBEDDING_MODEL` are forwarded when
+they are set in that file; otherwise they stay at application defaults.
 
 ### Run with Docker
 

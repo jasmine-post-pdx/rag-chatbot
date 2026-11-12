@@ -46,6 +46,73 @@ def test_empty_environment_api_key_fails_settings_validation(monkeypatch, api_ke
         Settings(_env_file=None)
 
 
+def test_generation_client_settings_use_current_client_defaults(monkeypatch):
+    """Keep timeout, retries, output cap, and instructions at today's behavior.
+
+    Args:
+        monkeypatch: Pytest fixture used to clear environment variables.
+    """
+    for name in (
+        "GENERATION_TIMEOUT_SECONDS",
+        "GENERATION_MAX_RETRIES",
+        "GENERATION_MAX_OUTPUT_TOKENS",
+        "GENERATION_INSTRUCTIONS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.generation_timeout_seconds == 30.0
+    assert settings.generation_max_retries == 2
+    assert settings.generation_max_output_tokens is None
+    assert settings.generation_instructions is None
+
+
+def test_generation_client_settings_load_from_environment(monkeypatch):
+    """Load generation client overrides from the environment.
+
+    Args:
+        monkeypatch: Pytest fixture used to set environment variables.
+    """
+    monkeypatch.setenv("GENERATION_TIMEOUT_SECONDS", "12.5")
+    monkeypatch.setenv("GENERATION_MAX_RETRIES", "4")
+    monkeypatch.setenv("GENERATION_MAX_OUTPUT_TOKENS", "256")
+    monkeypatch.setenv("GENERATION_INSTRUCTIONS", "  Be concise.  ")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.generation_timeout_seconds == 12.5
+    assert settings.generation_max_retries == 4
+    assert settings.generation_max_output_tokens == 256
+    assert settings.generation_instructions == "Be concise."
+
+
+@pytest.mark.parametrize(
+    ("env_name", "env_value", "match"),
+    [
+        ("GENERATION_TIMEOUT_SECONDS", "0", "greater than 0"),
+        ("GENERATION_MAX_RETRIES", "-1", "greater than or equal to 0"),
+        ("GENERATION_MAX_OUTPUT_TOKENS", "0", "greater than 0"),
+        ("GENERATION_INSTRUCTIONS", "   ", "GENERATION_INSTRUCTIONS must not be empty"),
+    ],
+)
+def test_generation_client_settings_reject_invalid_values(
+    monkeypatch, env_name, env_value, match
+):
+    """Reject timeouts, retry counts, output caps, and instructions that cannot be used.
+
+    Args:
+        monkeypatch: Pytest fixture used to set environment variables.
+        env_name: Setting environment variable to override.
+        env_value: Invalid value to validate.
+        match: Expected validation message fragment.
+    """
+    monkeypatch.setenv(env_name, env_value)
+
+    with pytest.raises(ValidationError, match=match):
+        Settings(_env_file=None)
+
+
 def test_environment_api_key_is_loaded_as_secret(monkeypatch):
     """Load a non-empty environment API key into a masked secret setting.
 
