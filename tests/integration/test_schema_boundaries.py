@@ -11,19 +11,26 @@ from app.services.question_workflow import QuestionWorkflow
 
 def test_public_models_are_independent_from_service_models():
     """The public result and every nested model have separate definitions."""
+    from app.domain import questions as internal
     from app.schemas import questions as public
-    from app.services import models as internal
 
-    for name in ("Citation", "RetrievalMetrics", "ModelMetrics", "QuestionResult"):
-        assert getattr(public, name) is not getattr(internal, name)
+    public_names = {
+        "Citation": "CitationResponse",
+        "RetrievalMetrics": "RetrievalMetricsResponse",
+        "ModelMetrics": "ModelMetricsResponse",
+        "QuestionResult": "QuestionResultResponse",
+    }
+    for internal_name, public_name in public_names.items():
+        assert getattr(public, public_name) is not getattr(internal, internal_name)
+        assert not issubclass(getattr(public, public_name), getattr(internal, internal_name))
     assert public.QuestionJobResponse.model_fields["result"].annotation == (
-        public.QuestionResult | None
+        public.QuestionResultResponse | None
     )
 
 
 def test_submit_and_poll_map_nested_results(client, store_factory):
     """A result with citations survives both response mappings unchanged."""
-    from app.services.models import Citation, ModelMetrics, QuestionResult, RetrievalMetrics
+    from app.domain.questions import Citation, ModelMetrics, QuestionResult, RetrievalMetrics
 
     class Processor:
         def process(self, request_id, question, *, correlation_id=None):
@@ -89,7 +96,7 @@ def test_poll_legacy_job_with_nested_result(client, tmp_path, store_factory):
 @pytest.mark.parametrize("endpoint", ["submit", "poll"])
 def test_malformed_nested_dto_returns_generic_500(client, store_factory, endpoint):
     """Unvalidated internal objects must be validated at the public boundary."""
-    from app.services.models import ModelMetrics, QuestionJob, QuestionResult, RetrievalMetrics
+    from app.domain.questions import ModelMetrics, QuestionJob, QuestionResult, RetrievalMetrics
 
     class BadWorkflow(QuestionWorkflow):
         def result(self):

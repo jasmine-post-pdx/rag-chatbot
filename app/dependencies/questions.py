@@ -1,6 +1,8 @@
 """Dependencies for question workflows."""
 
-from fastapi import Request
+from typing import Annotated
+
+from fastapi import Depends, Request
 
 from app.services.question_workflow import QuestionWorkflow
 
@@ -15,3 +17,6 @@ def get_question_workflow(request: Request) -> QuestionWorkflow:
         The configured question service.
     """
     return request.app.state.question_workflow
+
+
+QuestionWorkflowDep = Annotated[QuestionWorkflow, Depends(get_question_workflow)]

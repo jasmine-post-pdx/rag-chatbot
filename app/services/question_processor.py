@@ -2,7 +2,7 @@
 
 from typing import Protocol
 
-from app.services.models import (
+from app.domain.questions import (
     ModelMetrics,
     QuestionResult,
     RetrievalMetrics,

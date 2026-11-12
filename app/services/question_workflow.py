@@ -4,12 +4,13 @@ import hashlib
 from collections.abc import Callable
 from uuid import uuid4
 
-from app.services.models import QuestionJob, QuestionResult
+from app.domain.errors import IdempotencyKeyReuseError
+from app.domain.questions import QuestionJob, QuestionResult
 from app.services.question_processor import (
     PlaceholderQuestionProcessor,
     QuestionProcessor,
 )
-from app.stores.question_jobs import IdempotencyKeyReuseError, QuestionJobStore
+from app.stores.question_job_store import QuestionJobStore
 
 
 class QuestionProcessingError(Exception):
@@ -158,10 +159,6 @@ class QuestionWorkflow:
     def get_job(self, request_id: str) -> QuestionJob | None:
         """Return the persisted job state."""
         return self._store.get_job(request_id)
-
-    def is_ready(self) -> bool:
-        """Delegate readiness checks to the configured store."""
-        return self._store.is_ready()
 
     def close(self) -> None:
         """Close the configured job store."""

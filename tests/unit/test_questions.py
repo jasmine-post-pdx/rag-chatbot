@@ -7,15 +7,15 @@ from uuid import UUID
 
 import pytest
 
-from app.services.models import (
+from app.domain.errors import IdempotencyKeyReuseError
+from app.domain.questions import (
     ModelMetrics,
     QuestionJob,
     QuestionResult,
     RetrievalMetrics,
 )
 from app.services.question_workflow import QuestionProcessingError, QuestionWorkflow
-from app.stores.question_jobs import IdempotencyKeyReuseError
-from app.stores.questions import SQLiteQuestionJobStore
+from app.stores.sqlite import SQLiteQuestionJobStore
 
 
 def _result(request_id: str) -> QuestionResult:

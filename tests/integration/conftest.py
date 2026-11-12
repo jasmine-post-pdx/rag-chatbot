@@ -19,6 +19,7 @@ if os.getenv("RUN_OPENAI_SMOKE") != "1":
 os.environ.update(test_environment)
 
 from app import main  # noqa: E402
+from app.dependencies.question_jobs import get_question_job_store
 from app.dependencies.questions import get_question_workflow
 from app.services.question_workflow import QuestionWorkflow  # noqa: E402
 
@@ -57,3 +58,4 @@ def client(question_workflow):
             yield test_client
     finally:
         main.app.dependency_overrides.pop(get_question_workflow, None)
+        main.app.dependency_overrides.pop(get_question_job_store, None)

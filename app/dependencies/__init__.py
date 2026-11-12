@@ -1,1 +1,1 @@
-"""Dependencies shared by HTTP routes."""
+"""HTTP dependencies for question workflows and the question-job store."""

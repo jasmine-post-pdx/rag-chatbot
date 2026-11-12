@@ -22,7 +22,7 @@ from app.services.question_workflow import (
     QuestionStatePersistenceError,
     QuestionWorkflow,
 )
-from app.stores.questions import SQLiteQuestionJobStore
+from app.stores.sqlite import SQLiteQuestionJobStore
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,7 @@ async def lifespan(app: FastAPI) -> None:
     store = SQLiteQuestionJobStore(db_path=str(settings.questions_db_path))
     try:
         store.verify_integrity()
+        app.state.question_job_store = store
         app.state.question_workflow = QuestionWorkflow(
             store=store,
             processor=processor,
@@ -55,6 +56,7 @@ async def lifespan(app: FastAPI) -> None:
         yield
     finally:
         store.close()
+        app.state.question_job_store = None
         app.state.question_workflow = None
 
 

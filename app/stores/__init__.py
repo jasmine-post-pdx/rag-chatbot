@@ -1,1 +1,1 @@
-"""Question job storage implementations."""
+"""Question job store protocol and SQLite implementation."""

@@ -10,30 +10,32 @@ local placeholder or the configured OpenAI provider.
 ```text
 client
   -> FastAPI routes (`app/routers/`) and request middleware (`app/middleware.py`)
-    -> `QuestionWorkflow` (`app/services/question_workflow.py`)
+    -> question routes -> `QuestionWorkflow` (`app/services/question_workflow.py`)
       -> `QuestionProcessor` (`app/services/question_processor.py`)
-      -> `QuestionJobStore` (`app/stores/question_jobs.py`)
-        -> `SQLiteQuestionJobStore` (`app/stores/questions.py`)
+      -> `QuestionJobStore` (`app/stores/question_job_store.py`)
+        -> `SQLiteQuestionJobStore` (`app/stores/sqlite.py`)
+    -> readiness -> `QuestionJobStore.is_ready()`
 ```
 
 | Area | Current responsibility |
 | --- | --- |
 | `app/main.py`, `app/middleware.py` | Application lifespan, error handling, and request correlation. |
-| `app/routers/`, `app/dependencies/` | Health, readiness, and question endpoints with shared workflow lookup. |
+| `app/routers/`, `app/dependencies/` | Health, readiness, and question endpoints. Question routes use the workflow; readiness uses the job store. |
 | `app/config/` | Environment-based settings and standard-library logging configuration. |
 | `app/services/question_workflow.py` | Generates job IDs, coordinates answer processing, idempotency, and success or failure persistence. |
 | `app/services/question_processor.py` | Processor interface and placeholder implementation; the answerer also supports a configured model provider. |
-| `app/stores/` | Job-store interface and SQLite-backed implementation. |
+| `app/stores/` | `QuestionJobStore` protocol and SQLite-backed implementation. |
 | `scripts/question_job_maintenance.py` | SQLite snapshots, tiered backup rotation, and terminal-job archiving. |
-| `app/services/models.py` | Internal job and answer DTOs shared by processing and storage. |
-| `app/schemas/` | Independent public question and error schemas, including safe processing failure categories. |
+| `app/domain/` | Internal job and answer DTOs, plus domain errors such as idempotency-key reuse. |
+| `app/schemas/` | Independent public question, health, and error schemas, including safe processing failure categories. |
 | `app/llm/` | Generation interfaces, local fake, and OpenAI Responses adapter. |
 | `app/retrieval/`, `app/tools/` | Package placeholders; no retrieval or tool behavior is implemented yet. |
 
 The FastAPI application lifespan creates, verifies, and owns the SQLite store,
 injects it into the workflow, and closes it on shutdown or failed startup after
-creation. The workflow is shared with routes through dependency injection. Question
-submission assigns a job ID, checks any idempotency key, processes the question,
+creation. Question routes receive the workflow through dependency injection, and the
+readiness route checks the same store directly. Question submission assigns a job
+ID, checks any idempotency key, processes the question,
 then persists and returns its terminal result in one request; in-flight work is
 not stored. The HTTP correlation ID is passed independently to the processor.
 Processing failures are persisted as failed jobs with a safe error category; the

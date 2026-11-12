@@ -3,47 +3,47 @@
 from collections.abc import Mapping
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Header, HTTPException, Request, status
 
-from app.dependencies.questions import get_question_workflow
+from app.dependencies.questions import QuestionWorkflowDep
+from app.domain.errors import IdempotencyKeyReuseError
+from app.domain.questions import QuestionResult
 from app.schemas.questions import (
-    Citation,
-    ModelMetrics,
+    CitationResponse,
+    ModelMetricsResponse,
+    QuestionCreate,
     QuestionJobResponse,
-    QuestionRequest,
-    QuestionResult,
-    RetrievalMetrics,
+    QuestionResultResponse,
+    RetrievalMetricsResponse,
 )
-from app.services.models import QuestionResult as QuestionResultDTO
-from app.services.question_workflow import QuestionWorkflow
-from app.stores.question_jobs import IdempotencyKeyReuseError
 
-router = APIRouter()
+router = APIRouter(prefix="/v1/questions", tags=["questions"])
 
 
-def _result_response(result: QuestionResultDTO) -> QuestionResult:
+def to_question_result_response(result: QuestionResult) -> QuestionResultResponse:
     """Map the service result and its nested values to public response models."""
+
     def field(value: Any, name: str) -> Any:
         return value[name] if isinstance(value, Mapping) else getattr(value, name)
 
     retrieval = field(result, "retrieval")
     model = field(result, "model")
-    return QuestionResult(
+    return QuestionResultResponse(
         request_id=field(result, "request_id"),
         answer=field(result, "answer"),
         citations=[
-            Citation(
+            CitationResponse(
                 source_id=field(citation, "source_id"),
                 chunk_id=field(citation, "chunk_id"),
                 text=field(citation, "text"),
             )
             for citation in field(result, "citations")
         ],
-        retrieval=RetrievalMetrics(
+        retrieval=RetrievalMetricsResponse(
             documents_considered=field(retrieval, "documents_considered"),
             chunks_returned=field(retrieval, "chunks_returned"),
         ),
-        model=ModelMetrics(
+        model=ModelMetricsResponse(
             provider=field(model, "provider"),
             name=field(model, "name"),
             input_tokens=field(model, "input_tokens"),
@@ -53,27 +53,27 @@ def _result_response(result: QuestionResultDTO) -> QuestionResult:
 
 
 @router.post(
-    "/v1/questions",
-    response_model=QuestionResult,
+    "",
+    response_model=QuestionResultResponse,
     responses={
         status.HTTP_409_CONFLICT: {
             "description": "Idempotency-Key was reused with a different question"
         }
     },
 )
-def submit_question(
-    request: QuestionRequest,
+def create_question(
+    body: QuestionCreate,
     http_request: Request,
-    question_workflow: QuestionWorkflow = Depends(get_question_workflow),  # noqa: B008
+    question_workflow: QuestionWorkflowDep,
     idempotency_key: Annotated[
         str | None,
         Header(alias="Idempotency-Key", min_length=1, max_length=255),
     ] = None,
-) -> QuestionResult:
+) -> QuestionResultResponse:
     """Process a question and return its answer and metadata.
 
     Args:
-        request: The question payload from the client.
+        body: The question payload from the client.
         http_request: The HTTP request containing the middleware correlation ID.
         question_workflow: The workflow used to process and persist the job.
         idempotency_key: Optional client key for reusing a prior terminal result.
@@ -91,11 +91,11 @@ def submit_question(
 
     try:
         result = question_workflow.submit_question(
-            request.question,
+            body.question,
             correlation_id=http_request.state.request_id,
             idempotency_key=idempotency_key,
         )
-        return _result_response(result)
+        return to_question_result_response(result)
     except IdempotencyKeyReuseError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -103,10 +103,10 @@ def submit_question(
         ) from None
 
 
-@router.get("/v1/questions/{request_id}", response_model=QuestionJobResponse)
-def question_status(
+@router.get("/{request_id}", response_model=QuestionJobResponse)
+def get_question(
     request_id: str,
-    question_workflow: QuestionWorkflow = Depends(get_question_workflow),  # noqa: B008
+    question_workflow: QuestionWorkflowDep,
 ) -> QuestionJobResponse:
     """Return the current state of a question job.
 
@@ -126,6 +126,6 @@ def question_status(
     return QuestionJobResponse(
         request_id=job.request_id,
         status=job.status,
-        result=_result_response(job.result) if job.result is not None else None,
+        result=to_question_result_response(job.result) if job.result is not None else None,
         error_category=job.error_category,
     )

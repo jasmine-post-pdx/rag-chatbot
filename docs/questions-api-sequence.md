@@ -70,7 +70,7 @@ sequenceDiagram
     end
     opt A result was returned
         API->>API: Map DTO to public response schema
-        API-->>MW: 200 QuestionResult
+        API-->>MW: 200 QuestionResultResponse
         MW-->>Client: 200 with x-request-id
     end
 ```

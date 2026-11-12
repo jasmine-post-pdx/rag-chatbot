@@ -4,12 +4,12 @@ import logging
 import time
 
 from app.config.logging import sanitize_exception_summary
-from app.llm.generation import LLMClient
-from app.services.models import (
+from app.domain.questions import (
     ModelMetrics,
     QuestionResult,
     RetrievalMetrics,
 )
+from app.llm.generation import LLMClient
 
 logger = logging.getLogger(__name__)
 

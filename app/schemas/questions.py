@@ -10,7 +10,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, StringConstraints
 
 
-class QuestionRequest(BaseModel):
+class QuestionCreate(BaseModel):
     """Request body for submitting a question.
 
     Attributes:
@@ -23,7 +23,7 @@ class QuestionRequest(BaseModel):
     ]
 
 
-class Citation(BaseModel):
+class CitationResponse(BaseModel):
     """A source excerpt supporting a generated answer."""
 
     source_id: str
@@ -31,14 +31,14 @@ class Citation(BaseModel):
     text: str
 
 
-class RetrievalMetrics(BaseModel):
+class RetrievalMetricsResponse(BaseModel):
     """Counts describing retrieval work for a question."""
 
     documents_considered: int
     chunks_returned: int
 
 
-class ModelMetrics(BaseModel):
+class ModelMetricsResponse(BaseModel):
     """Provider, model, and token usage for answer generation."""
 
     provider: str
@@ -47,14 +47,14 @@ class ModelMetrics(BaseModel):
     output_tokens: int
 
 
-class QuestionResult(BaseModel):
+class QuestionResultResponse(BaseModel):
     """Completed answer and supporting metadata."""
 
     request_id: str
     answer: str
-    citations: list[Citation]
-    retrieval: RetrievalMetrics
-    model: ModelMetrics
+    citations: list[CitationResponse]
+    retrieval: RetrievalMetricsResponse
+    model: ModelMetricsResponse
 
 
 class QuestionJobResponse(BaseModel):
@@ -62,12 +62,12 @@ class QuestionJobResponse(BaseModel):
 
     Attributes:
         request_id: Unique identifier of the question job.
-        status: Whether processing is pending or completed.
-        result: Completed answer and metadata, or ``None`` while pending.
+        status: Whether processing is pending, completed, or failed.
+        result: Completed answer and metadata, or ``None`` while pending or failed.
     """
 
     request_id: str
     status: Literal["pending", "completed", "failed"]
-    result: QuestionResult | None = None
+    result: QuestionResultResponse | None = None
     # Controlled category only; provider exception details stay in server logs.
     error_category: Literal["processing_error"] | None = None

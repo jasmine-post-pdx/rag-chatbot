@@ -24,19 +24,21 @@ returned a placeholder answer. I reorganized that into a more conventional
 application structure so each part of the pipeline can evolve independently:
 
 - `app/main.py` sets up the application, lifespan, middleware, and error handlers.
-  `app/routers/` defines HTTP endpoints, and `app/dependencies/` provides the
-  shared question workflow to the routes.
-- `app/schemas/` holds public question and error schemas. API handlers map
+  `app/routers/` defines HTTP endpoints. `app/dependencies/` provides the
+  question workflow to question routes and the question-job store to readiness.
+- `app/schemas/` holds public question, health, and error schemas. API handlers map
   service DTOs to these independently defined response models.
 - `app/config/settings.py` centralizes settings loaded from environment variables
   and an optional `.env` file. It keeps environment-specific values out of the
   source code; `app/config/logging.py` configures application logging.
 - `app/services/question_workflow.py` assigns job IDs and coordinates idempotency,
   answer processing, and persistence. The processor interface and placeholder
-  live in `app/services/question_processor.py`; the `QuestionJobStore` interface
-  and SQLite implementation live under `app/stores/`. Completed and failed jobs
-  survive restarts and can be retrieved through the status endpoint.
-- `app/services/models.py` defines internal question result and job DTOs.
+  live in `app/services/question_processor.py`; the `QuestionJobStore` protocol
+  lives in `app/stores/question_job_store.py` and the SQLite implementation lives
+  in `app/stores/sqlite.py`. Completed and failed jobs survive restarts and can
+  be retrieved through the status endpoint.
+- `app/domain/questions.py` defines internal question result and job DTOs.
+  `app/domain/errors.py` defines domain errors such as idempotency-key reuse.
 - `app/retrieval/` will own chunking, indexing, search, ranking, and context
   assembly once the retrieval adapters are added.
 - `app/llm/` holds provider-neutral generation interfaces, including the

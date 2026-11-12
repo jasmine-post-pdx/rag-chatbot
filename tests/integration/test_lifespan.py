@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import main
-from app.stores.questions import SQLiteQuestionJobStore
+from app.stores.sqlite import SQLiteQuestionJobStore
 
 
 def test_lifespan_shares_and_closes_store(monkeypatch):
@@ -22,11 +22,13 @@ def test_lifespan_shares_and_closes_store(monkeypatch):
     with TestClient(main.app) as client:
         workflow = main.app.state.question_workflow
         assert workflow._store is stores[0]
+        assert main.app.state.question_job_store is stores[0]
         assert client.get("/ready").json() == {"status": "ready"}
         submitted = client.post("/v1/questions", json={"question": "Hello"}).json()
         assert stores[0].get_job(submitted["request_id"]).result.answer == submitted["answer"]
 
     assert main.app.state.question_workflow is None
+    assert main.app.state.question_job_store is None
     assert stores[0].is_ready() is False
 
 
@@ -65,4 +67,5 @@ def test_lifespan_closes_store_on_partial_startup_failure(
 
     assert len(stores) == 1
     assert stores[0].is_ready() is False
+    assert main.app.state.question_job_store is None
     assert main.app.state.question_workflow is None

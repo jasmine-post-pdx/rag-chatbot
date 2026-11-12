@@ -18,8 +18,8 @@ from pathlib import Path
 from typing import Sequence
 
 from app.config.settings import settings
-from app.services.models import QuestionJob
-from app.stores.questions import SQLiteQuestionJobStore
+from app.domain.questions import QuestionJob
+from app.stores.sqlite import SQLiteQuestionJobStore
 
 BATCH_SIZE = 500
 SNAPSHOT_FORMAT = "%Y%m%dT%H%M%S%fZ"

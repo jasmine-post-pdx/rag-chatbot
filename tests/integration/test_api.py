@@ -6,10 +6,11 @@ import logging
 import pytest
 
 from app import main
+from app.dependencies.question_jobs import get_question_job_store
 from app.dependencies.questions import get_question_workflow
-from app.services.models import QuestionJob
+from app.domain.questions import QuestionJob
 from app.services.question_workflow import QuestionWorkflow
-from app.stores.questions import SQLiteQuestionJobStore
+from app.stores.sqlite import SQLiteQuestionJobStore
 
 # /health
 
@@ -31,18 +32,17 @@ def test_readiness_returns_ready(client):
     assert ready.json() == {"status": "ready"}
 
 
-def test_ready_returns_503_when_database_unavailable(client, store_factory):
+def test_ready_returns_503_when_database_unavailable(client):
     """Verify /ready returns 503 when the SQLite backing store is unusable."""
 
-    class UnreadyQuestionWorkflow(QuestionWorkflow):
-        """Stub service that reports itself as not ready."""
+    class UnreadyQuestionJobStore:
+        """Stub store that reports itself as not ready."""
 
         def is_ready(self) -> bool:
             """Return False to simulate a failed dependency."""
             return False
 
-    unready_workflow = UnreadyQuestionWorkflow(store_factory())
-    main.app.dependency_overrides[get_question_workflow] = lambda: unready_workflow
+    main.app.dependency_overrides[get_question_job_store] = lambda: UnreadyQuestionJobStore()
     response = client.get("/ready")
 
     assert response.status_code == 503
