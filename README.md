@@ -44,8 +44,9 @@ application structure so each part of the pipeline can evolve independently:
 - `app/llm/` holds provider-neutral generation interfaces, including the
   OpenAI Responses adapter and a deterministic fake.
 - `app/tools/` is reserved for optional callable tools the generator can use.
-- `tests/unit/`, `tests/integration/`, and `tests/evals/` mirror these
-  responsibilities and hold the corresponding automated tests.
+- `tests/unit/` and `tests/integration/` cover configuration, logging, job
+  storage, question processing, generation, and the HTTP API. `tests/evals/`
+  is reserved for retrieval and answer-quality evaluations.
 
 This structure keeps API handlers thin and separates workflow, answer
 processing, and job persistence. Retrieval and tool packages remain placeholders;
@@ -128,11 +129,13 @@ OPENAI_API_KEY=your-key-here
 Do not commit real credentials to the repository.
 
 Local runs load all of these settings from environment variables or `.env`.
-Docker Compose currently forwards the Postgres settings, sets
-`QUESTIONS_DB_PATH` to `/app/data/questions.db`, and otherwise uses application
-defaults. Settings such as `LOG_LEVEL` and model configuration will need to be
-added to the Compose environment before `.env` overrides affect them inside the
-container.
+Docker Compose sets `QUESTIONS_DB_PATH` to `/app/data/questions.db` and forwards
+the archive directory, backup directory, live and archive retention, and
+Postgres settings from the environment, using the same defaults as the
+application. `LOG_LEVEL`, `GENERATION_PROVIDER`, `GENERATION_MODEL`,
+`EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, and `OPENAI_API_KEY` stay at
+application defaults inside the container until they are added to the Compose
+service environment.
 
 ### Run with Docker
 
@@ -316,8 +319,10 @@ curl -X POST http://localhost:8000/v1/questions \
   -d '{"question": "What is RAG?"}'
 ```
 
-Failure request logs include an `error_category` field. This is log metadata;
-HTTP error responses return a concise `detail` field instead:
+Request logs for validation failures (`422`) and server errors (`500`) include
+an `error_category` field. Logs for other responses, including `404` and `409`,
+record the status without that field. `error_category` is log metadata; HTTP
+error responses return a concise `detail` field instead:
 
 ```
 INFO:     Request completed request_id=<uuid> method=POST route=/v1/questions status=422 elapsed_ms=2.1 error_category=validation
@@ -407,9 +412,10 @@ Run the linter:
 ruff check app tests
 ```
 
-The integration tests exercise the HTTP API with an in-memory service override,
-and the unit/evals directories are ready for retrieval, generation, and quality
-tests as those layers are added.
+The integration tests exercise the HTTP API through a dependency override
+backed by an in-memory SQLite store. Unit tests cover configuration, logging,
+job storage, the placeholder and LLM processors, and the generation adapters.
+`tests/evals/` is still a placeholder for retrieval and answer-quality tests.
 
 ## Notes & findings
 

@@ -48,15 +48,16 @@ service is not connected to the application.
 The maintenance command keeps 30 days of jobs live, archives older terminal
 jobs, and expires archived rows after the configured archive period.
 
-The `data/raw/`, `data/processed/`, and `scripts/` directories are reserved for
-future ingestion work and currently contain no pipeline implementation.
+`scripts/question_job_maintenance.py` backs up, archives, and checks the SQLite
+job store. The repository does not yet contain `data/raw/`, `data/processed/`,
+or an ingestion pipeline.
 
 ## Tests today
 
 | Path | Current contents |
 | --- | --- |
-| `tests/unit/` | Configuration and SQLite question-service tests. |
-| `tests/integration/` | API behavior, request handling, and service failure cases. |
+| `tests/unit/` | Configuration, logging, SQLite job storage, question processors, and generation adapters. |
+| `tests/integration/` | HTTP API behavior, OpenAPI and schema contracts, lifespan, request logging, generation wiring, and an opt-in OpenAI smoke test. |
 | `tests/evals/` | Placeholder package; no retrieval or answer-quality evaluations exist yet. |
 
 ## Future RAG plan
