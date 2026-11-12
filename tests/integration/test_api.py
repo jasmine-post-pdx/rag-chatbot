@@ -58,11 +58,11 @@ def test_submit_and_poll_question_returns_answer_and_metadata(client):
 
     assert response.status_code == 200
     submitted = response.json()
-    request_id = submitted["request_id"]
-    assert isinstance(request_id, str)
-    assert request_id
+    question_id = submitted["question_id"]
+    assert isinstance(question_id, str)
+    assert question_id
     assert submitted == {
-        "request_id": request_id,
+        "question_id": question_id,
         "answer": "This is a placeholder answer for: What is RAG?",
         "citations": [],
         "retrieval": {"documents_considered": 0, "chunks_returned": 0},
@@ -74,13 +74,13 @@ def test_submit_and_poll_question_returns_answer_and_metadata(client):
         },
     }
 
-    polled = client.get(f"/v1/questions/{request_id}")
+    polled = client.get(f"/v1/questions/{question_id}")
     assert polled.status_code == 200
     assert polled.json() == {
-        "request_id": request_id,
+        "question_id": question_id,
         "status": "completed",
         "result": {
-            "request_id": request_id,
+            "question_id": question_id,
             "answer": "This is a placeholder answer for: What is RAG?",
             "citations": [],
             "retrieval": {"documents_considered": 0, "chunks_returned": 0},
@@ -115,7 +115,7 @@ def test_idempotent_failed_submission_reuses_failed_job(client, store_factory):
         def __init__(self):
             self.calls = 0
 
-        def process(self, request_id, question, *, correlation_id=None):
+        def process(self, question_id, question, *, request_id=None):
             self.calls += 1
             raise TimeoutError("private provider detail")
 
@@ -143,9 +143,9 @@ def test_idempotent_incomplete_submission_returns_original_question_id(
 ):
     """An incomplete persisted job remains pollable and yields a safe error on retry."""
     question_store._insert_job(
-        QuestionJob(request_id="incomplete-job", status=job_status),
+        QuestionJob(question_id="incomplete-job", status=job_status),
         idempotency_key_hash=hashlib.sha256(b"key").hexdigest(),
-        request_fingerprint=hashlib.sha256(b"Help").hexdigest(),
+        question_fingerprint=hashlib.sha256(b"Help").hexdigest(),
     )
     response = client.post(
         "/v1/questions", json={"question": "Help"}, headers={"Idempotency-Key": "key"}
@@ -288,7 +288,7 @@ def test_poll_unknown_question_is_404(client):
 def test_submit_missing_or_malformed_result_returns_generic_500(client, store_factory, result):
     """A broken workflow result is treated as a server error, not a client error."""
     class BadResponseQuestionWorkflow(QuestionWorkflow):
-        def submit_question(self, question, *, correlation_id=None, idempotency_key=None):
+        def submit_question(self, question, *, request_id=None, idempotency_key=None):
             return result
 
     workflow = BadResponseQuestionWorkflow(store_factory())
@@ -308,16 +308,16 @@ def test_invalid_server_response_data_returns_500(client, store_factory):
     class BadResponseQuestionWorkflow(QuestionWorkflow):
         """Stub service that returns malformed response data."""
 
-        def get_job(self, request_id):
+        def get_job(self, question_id):
             """Return a fake job whose result violates the response model."""
 
             class FakeJob:
                 def __init__(self, job_id):
-                    self.request_id = job_id
+                    self.question_id = job_id
                     self.status = "completed"
                     self.error_category = None
                     self.result = {
-                        "request_id": job_id,
+                        "question_id": job_id,
                         "answer": 123,
                         "citations": "not a list",
                         "retrieval": {
@@ -332,7 +332,7 @@ def test_invalid_server_response_data_returns_500(client, store_factory):
                         },
                     }
 
-            return FakeJob(request_id)
+            return FakeJob(question_id)
 
     bad_service = BadResponseQuestionWorkflow(store_factory())
     main.app.dependency_overrides[get_question_workflow] = lambda: bad_service
@@ -368,7 +368,7 @@ def test_submit_pipeline_failure_returns_generic_500(
     class FailingProcessor:
         """Processor that fails at the simulated pipeline stage."""
 
-        def process(self, request_id, question, *, correlation_id=None):
+        def process(self, question_id, question, *, request_id=None):
             raise failure_type(f"{failure_stage} failed: {error_message}")
 
     store = store_factory()
@@ -388,17 +388,17 @@ def test_submit_pipeline_failure_returns_generic_500(
     ]
     assert len(error_records) == 1
     assert error_records[0].exception_type == failure_type.__name__
-    request_id = response.headers["x-question-id"]
-    assert error_records[0].question_id == request_id
+    question_id = response.headers["x-question-id"]
+    assert error_records[0].question_id == question_id
     request_records = [
         record for record in caplog.records if record.name == "app.middleware"
     ]
     assert len(request_records) == 1
     assert request_records[0].status == 500
-    poll = client.get(f"/v1/questions/{request_id}")
+    poll = client.get(f"/v1/questions/{question_id}")
     assert poll.status_code == 200
     assert poll.json() == {
-        "request_id": request_id,
+        "question_id": question_id,
         "status": "failed",
         "result": None,
         "error_category": "processing_error",
@@ -408,16 +408,16 @@ def test_submit_pipeline_failure_returns_generic_500(
 def test_submit_failure_state_persistence_error_returns_generic_500(client, store_factory):
     """Verify failure-state persistence errors produce a generic server response."""
     class FailingProcessor:
-        def process(self, request_id, question, *, correlation_id=None):
+        def process(self, question_id, question, *, request_id=None):
             raise TimeoutError("provider token must not reach the client")
 
     class FailingFailureStore(SQLiteQuestionJobStore):
         def __init__(self):
             super().__init__()
-            self.failed_request_id = None
+            self.failed_question_id = None
 
-        def create_failed_job(self, request_id, error_category, **kwargs):
-            self.failed_request_id = request_id
+        def create_failed_job(self, question_id, error_category, **kwargs):
+            self.failed_question_id = question_id
             raise RuntimeError("database connection detail must not reach the client")
 
     store = store_factory(store_type=FailingFailureStore)
@@ -431,7 +431,7 @@ def test_submit_failure_state_persistence_error_returns_generic_500(client, stor
     assert "provider token" not in response.text
     assert "database connection detail" not in response.text
     assert "x-question-id" not in response.headers
-    assert store.get_job(store.failed_request_id) is None
+    assert store.get_job(store.failed_question_id) is None
 
 
 def test_submit_sqlite_failure_returns_generic_500(client, question_store):

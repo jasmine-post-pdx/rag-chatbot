@@ -21,7 +21,7 @@ Client          Middleware       FastAPI route       SQLite store       SQLite d
   |--------------->|---------------->|                 |                |
   |                |                 | is_ready()      |                |
   |                |                 |---------------->|                |
-  |                |                 |                 | SELECT request_id FROM question_jobs LIMIT 1
+  |                |                 |                 | SELECT question_id FROM question_jobs LIMIT 1
   |                |                 |                 |--------------->|
   |                |                 |                 |<---------------|
   |                |                 |<----------------| True/False      |
@@ -52,7 +52,7 @@ sequenceDiagram
     API->>Dep: get_question_job_store(request)
     Dep-->>API: Shared store from app state
     API->>Store: is_ready()
-    Store->>DB: SELECT request_id FROM question_jobs LIMIT 1
+    Store->>DB: SELECT question_id FROM question_jobs LIMIT 1
     DB-->>Store: Row or empty result
 
     alt SQLite query succeeds

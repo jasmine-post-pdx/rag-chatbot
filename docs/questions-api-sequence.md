@@ -2,8 +2,8 @@
 
 The routes in `app/routers/questions.py` use the shared `QuestionWorkflow`
 from `app/dependencies/questions.py`. `app/middleware.py` supplies the HTTP
-correlation ID; the workflow generates a separate question job ID. Public
-request and response models live in `app/schemas/`, separate from service DTOs.
+request ID; the workflow generates a separate question ID. Public request and
+response models live in `app/schemas/`, separate from service DTOs.
 
 ## Submit a question
 
@@ -30,8 +30,8 @@ sequenceDiagram
     API->>Dep: get_question_workflow(request)
     Dep-->>API: Shared workflow from app state
     API->>API: Validate question and idempotency key
-    API->>WF: submit_question(question, correlation ID, key)
-    WF->>WF: Generate job ID
+    API->>WF: submit_question(question, request ID, key)
+    WF->>WF: Generate question ID
     opt Idempotency key supplied
         WF->>Store: Look up hashed key
         Store-->>WF: Existing job and fingerprint, or none
@@ -48,7 +48,7 @@ sequenceDiagram
         MW-->>Err: Propagate error
         Err-->>Client: Generic 500 with x-request-id and x-question-id
     else No saved job for the key
-        WF->>Processor: process(job ID, question, correlation ID)
+        WF->>Processor: process(question ID, question, request ID)
         opt OpenAI provider configured
             Processor->>LLM: generate(question)
             LLM-->>Processor: Answer and model usage, or error
@@ -88,7 +88,8 @@ key-conflict error instead.
 Invalid request data or keys return 422. Other unexpected errors, including
 failure to persist a failed job or an invalid server result, return a generic
 500; `x-question-id` is included for `QuestionProcessingError` only. The
-`x-request-id` response header is the HTTP correlation ID, not the job ID.
+`x-request-id` response header is the HTTP request ID. `x-question-id` is the
+question ID.
 
 ## Retrieve a question job
 
@@ -101,13 +102,13 @@ sequenceDiagram
     participant WF as QuestionWorkflow
     participant Store as SQLiteQuestionJobStore
 
-    Client->>MW: GET /v1/questions/{request_id}
+    Client->>MW: GET /v1/questions/{question_id}
     MW->>MW: Create/normalize x-request-id
     MW->>API: Forward request
     API->>Dep: get_question_workflow(request)
     Dep-->>API: Shared workflow from app state
-    API->>WF: get_job(request_id)
-    WF->>Store: get_job(request_id)
+    API->>WF: get_job(question_id)
+    WF->>Store: get_job(question_id)
     Store-->>WF: Stored job or none
     WF-->>API: Stored job or none
     alt Job exists
@@ -119,7 +120,7 @@ sequenceDiagram
     MW-->>Client: Response with x-request-id
 ```
 
-The job response contains `request_id`, `status`, `result`, and
+The job response contains `question_id`, `status`, `result`, and
 `error_category`. A completed job has a result; a failed job has the safe
 `processing_error` category. Legacy pending jobs can still be read, although
 the current submission workflow persists only terminal jobs. Archived jobs are

@@ -64,7 +64,7 @@ def test_answerer_maps_generation_result_to_question_result():
     result = answerer.process("req-1", "What is RAG?")
 
     assert client.questions == ["What is RAG?"]
-    assert result.request_id == "req-1"
+    assert result.question_id == "req-1"
     assert result.answer == "A generated answer"
     assert result.model == ModelMetrics(
         provider="test-provider",
@@ -86,7 +86,7 @@ def test_answerer_logs_generation_metadata_with_correlation_and_question_ids(cap
     answerer.process(
         "question-job-1",
         "What is RAG?",
-        correlation_id="http-request-1",
+        request_id="http-request-1",
     )
 
     record = next(
@@ -127,7 +127,7 @@ def test_answerer_logs_sanitized_failure_category_without_question(caplog):
         answerer.process(
             "question-job-2",
             "private prompt text",
-            correlation_id="http-request-2",
+            request_id="http-request-2",
         )
 
     record = next(
@@ -167,7 +167,7 @@ def test_answerer_satisfies_question_processor_interface(store_factory):
     """Verify the answerer plugs into the workflow as a question processor."""
     processor: QuestionProcessor = QuestionAnswerer(FakeLLMClient(model="fake-model"))
     workflow = QuestionWorkflow(
-        store_factory(":memory:"), processor, job_id_factory=lambda: "req-1"
+        store_factory(":memory:"), processor, question_id_factory=lambda: "req-1"
     )
 
     result = workflow.submit_question("What is RAG?")
@@ -186,7 +186,7 @@ def test_workflow_marks_job_failed_when_answerer_client_fails(store_factory):
     workflow = QuestionWorkflow(
         store_factory(":memory:"),
         QuestionAnswerer(FailingClient()),
-        job_id_factory=lambda: "req-1",
+        question_id_factory=lambda: "req-1",
     )
 
     with pytest.raises(QuestionProcessingError):

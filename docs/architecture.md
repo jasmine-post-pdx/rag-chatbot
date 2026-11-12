@@ -37,13 +37,13 @@ creation. Question routes receive the workflow through dependency injection, and
 readiness route checks the same store directly. Question submission assigns a job
 ID, checks any idempotency key, processes the question,
 then persists and returns its terminal result in one request; in-flight work is
-not stored. The HTTP correlation ID is passed independently to the processor.
+not stored. The HTTP request ID is passed independently to the processor.
 Processing failures are persisted as failed jobs with a safe error category; the
 submit request still returns a generic server error. API handlers map service
 results and their nested metadata to public schemas. The store serializes jobs as
 JSON in SQLite, preserves older two-column job tables when adding maintenance and
 idempotency metadata, and checks readiness with
-`SELECT request_id FROM question_jobs LIMIT 1`. The optional Compose pgvector
+`SELECT question_id FROM question_jobs LIMIT 1`. The optional Compose pgvector
 service is not connected to the application.
 The maintenance command keeps 30 days of jobs live, archives older terminal
 jobs, and expires archived rows after the configured archive period.

@@ -29,7 +29,7 @@ def to_question_result_response(result: QuestionResult) -> QuestionResultRespons
     retrieval = field(result, "retrieval")
     model = field(result, "model")
     return QuestionResultResponse(
-        request_id=field(result, "request_id"),
+        question_id=field(result, "question_id"),
         answer=field(result, "answer"),
         citations=[
             CitationResponse(
@@ -92,7 +92,7 @@ def create_question(
     try:
         result = question_workflow.submit_question(
             body.question,
-            correlation_id=http_request.state.request_id,
+            request_id=http_request.state.request_id,
             idempotency_key=idempotency_key,
         )
         return to_question_result_response(result)
@@ -103,15 +103,15 @@ def create_question(
         ) from None
 
 
-@router.get("/{request_id}", response_model=QuestionJobResponse)
+@router.get("/{question_id}", response_model=QuestionJobResponse)
 def get_question(
-    request_id: str,
+    question_id: str,
     question_workflow: QuestionWorkflowDep,
 ) -> QuestionJobResponse:
     """Return the current state of a question job.
 
     Args:
-        request_id: Unique identifier of the requested job.
+        question_id: Unique identifier of the requested job.
         question_workflow: The workflow used to look up the job.
 
     Returns:
@@ -120,11 +120,11 @@ def get_question(
     Raises:
         HTTPException: If no job exists for the given identifier.
     """
-    job = question_workflow.get_job(request_id)
+    job = question_workflow.get_job(question_id)
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question not found")
     return QuestionJobResponse(
-        request_id=job.request_id,
+        question_id=job.question_id,
         status=job.status,
         result=to_question_result_response(job.result) if job.result is not None else None,
         error_category=job.error_category,

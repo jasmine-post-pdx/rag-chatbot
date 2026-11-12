@@ -33,41 +33,42 @@ class QuestionAnswerer:
 
     def process(
         self,
-        request_id: str,
+        question_id: str,
         question: str,
         *,
-        correlation_id: str | None = None,
+        request_id: str | None = None,
     ) -> QuestionResult:
         """Generate an answer and map it to a question result.
 
         Args:
-            request_id: Identifier of the question job being processed.
+            question_id: Identifier of the question job being processed.
             question: User question to answer.
-            correlation_id: Middleware request ID used to correlate logs.
+            request_id: HTTP correlation ID used to correlate logs.
 
         Returns:
             The generated answer with model usage and empty retrieval metadata.
         """
-        log_request_id = correlation_id or request_id
         started_at = time.perf_counter()
         provider = getattr(self._client, "provider", type(self._client).__name__)
         model = getattr(self._client, "model", "unknown")
+        log_fields = {
+            "question_id": question_id,
+            "provider": provider,
+            "model": model,
+        }
+        if request_id is not None:
+            log_fields["request_id"] = request_id
         try:
             generation = self._client.generate(question)
         except Exception as exc:
             elapsed_ms = round((time.perf_counter() - started_at) * 1000, 3)
             error_category = _generation_error_category(exc)
-            summary = sanitize_exception_summary(
-                exc, sensitive_values=(question,)
-            )
+            summary = sanitize_exception_summary(exc, sensitive_values=(question,))
             logger.error(
                 "Generation failed: %s",
                 summary,
                 extra={
-                    "request_id": log_request_id,
-                    "question_id": request_id,
-                    "provider": provider,
-                    "model": model,
+                    **log_fields,
                     "elapsed_ms": elapsed_ms,
                     "error_category": error_category,
                     "exception_type": type(exc).__name__,
@@ -79,8 +80,7 @@ class QuestionAnswerer:
         logger.info(
             "Generation completed",
             extra={
-                "request_id": log_request_id,
-                "question_id": request_id,
+                **log_fields,
                 "provider": generation.provider,
                 "model": generation.model,
                 "elapsed_ms": elapsed_ms,
@@ -89,7 +89,7 @@ class QuestionAnswerer:
             },
         )
         return QuestionResult(
-            request_id=request_id,
+            question_id=question_id,
             answer=generation.answer,
             citations=[],
             retrieval=RetrievalMetrics(documents_considered=0, chunks_returned=0),

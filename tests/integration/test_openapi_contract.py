@@ -15,7 +15,7 @@ def test_full_openapi_contract_fingerprint():
     """Preserve the complete canonical OpenAPI document across runtime extraction."""
     canonical = json.dumps(app.openapi(), sort_keys=True, separators=(",", ":"))
     assert hashlib.sha256(canonical.encode()).hexdigest() == (
-        "abcbc13983d0c5b9c662dae5747fdb000040ce9d3568da33d541e3e24f9d7dc1"
+        "57e40b7054f3d2be826f072f390c52bcba35da751b38ab9b993ee6420cba1946"
     )
 
 
@@ -23,7 +23,7 @@ def test_question_routes_share_the_workflow_dependency():
     """Question routes use the shared workflow dependency."""
     assert {route.path for route in questions.router.routes} == {
         "/v1/questions",
-        "/v1/questions/{request_id}",
+        "/v1/questions/{question_id}",
     }
     for route in questions.router.routes:
         assert [dependency.call for dependency in route.dependant.dependencies] == [
@@ -44,7 +44,7 @@ def test_readiness_uses_the_job_store_dependency():
 def test_public_result_is_independent_of_internal_model():
     """The HTTP contract has its own model with the same current JSON shape."""
     payload = {
-        "request_id": "job-1",
+        "question_id": "job-1",
         "answer": "Answer",
         "citations": [{"source_id": "doc", "chunk_id": "part", "text": "excerpt"}],
         "retrieval": {"documents_considered": 1, "chunks_returned": 1},
@@ -70,7 +70,11 @@ def test_question_openapi_contract():
     assert question["minLength"] == 1
     assert question["maxLength"] == 4000
     assert set(schemas["QuestionResultResponse"]["required"]) == {
-        "request_id", "answer", "citations", "retrieval", "model"
+        "question_id",
+        "answer",
+        "citations",
+        "retrieval",
+        "model",
     }
     assert schemas["QuestionJobResponse"]["properties"]["status"]["enum"] == [
         "pending", "completed", "failed"

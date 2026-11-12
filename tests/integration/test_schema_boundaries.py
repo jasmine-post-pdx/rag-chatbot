@@ -33,9 +33,9 @@ def test_submit_and_poll_map_nested_results(client, store_factory):
     from app.domain.questions import Citation, ModelMetrics, QuestionResult, RetrievalMetrics
 
     class Processor:
-        def process(self, request_id, question, *, correlation_id=None):
+        def process(self, question_id, question, *, request_id=None):
             return QuestionResult(
-                request_id=request_id,
+                question_id=question_id,
                 answer="Answer",
                 citations=[Citation(source_id="doc", chunk_id="part", text="excerpt")],
                 retrieval=RetrievalMetrics(documents_considered=2, chunks_returned=1),
@@ -48,16 +48,16 @@ def test_submit_and_poll_map_nested_results(client, store_factory):
     assert submitted.status_code == 200
     result = submitted.json()
     assert result == {
-        "request_id": result["request_id"],
+        "question_id": result["question_id"],
         "answer": "Answer",
         "citations": [{"source_id": "doc", "chunk_id": "part", "text": "excerpt"}],
         "retrieval": {"documents_considered": 2, "chunks_returned": 1},
         "model": {"provider": "test", "name": "model", "input_tokens": 3, "output_tokens": 4},
     }
-    polled = client.get(f"/v1/questions/{result['request_id']}")
+    polled = client.get(f"/v1/questions/{result['question_id']}")
     assert polled.status_code == 200
     assert polled.json() == {
-        "request_id": result["request_id"], "status": "completed",
+        "question_id": result["question_id"], "status": "completed",
         "result": result, "error_category": None,
     }
 
@@ -82,15 +82,17 @@ def test_poll_legacy_job_with_nested_result(client, tmp_path, store_factory):
     response = client.get("/v1/questions/legacy")
     assert response.status_code == 200
     assert response.json() == {
-        "request_id": "legacy", "status": "completed", "error_category": None,
+        "question_id": "legacy", "status": "completed", "error_category": None,
         "result": {
-            "request_id": "legacy", "answer": "Old answer",
+            "question_id": "legacy", "answer": "Old answer",
             "citations": [{"source_id": "doc", "chunk_id": "chunk", "text": "excerpt"}],
             "retrieval": {"documents_considered": 1, "chunks_returned": 1},
             "model": {"provider": "local", "name": "stub", "input_tokens": 0, "output_tokens": 0},
         },
     }
-    assert store._conn.execute("SELECT job_json FROM question_jobs").fetchone()[0] == job_json
+    assert store._conn.execute("SELECT job_json FROM question_jobs").fetchone()[0] == (
+        job_json.replace('"request_id":', '"question_id":')
+    )
 
 
 @pytest.mark.parametrize("endpoint", ["submit", "poll"])
@@ -101,16 +103,16 @@ def test_malformed_nested_dto_returns_generic_500(client, store_factory, endpoin
     class BadWorkflow(QuestionWorkflow):
         def result(self):
             return QuestionResult.model_construct(
-                request_id="bad", answer="Answer", citations=[],
+                question_id="bad", answer="Answer", citations=[],
                 retrieval=RetrievalMetrics.model_construct(documents_considered="bad", chunks_returned=1),
                 model=ModelMetrics(provider="test", name="model", input_tokens=0, output_tokens=0),
             )
 
-        def submit_question(self, question, *, correlation_id=None, idempotency_key=None):
+        def submit_question(self, question, *, request_id=None, idempotency_key=None):
             return self.result()
 
-        def get_job(self, request_id):
-            return QuestionJob(request_id=request_id, status="completed", result=self.result())
+        def get_job(self, question_id):
+            return QuestionJob(question_id=question_id, status="completed", result=self.result())
 
     workflow = BadWorkflow(store_factory())
     main.app.dependency_overrides[get_question_workflow] = lambda: workflow
@@ -126,14 +128,14 @@ def test_malformed_nested_dto_returns_generic_500(client, store_factory, endpoin
 def test_mapping_shaped_workflow_result_is_validated(client, store_factory):
     """Keep accepting mapping-shaped server results as FastAPI previously did."""
     result = {
-        "request_id": "mapped", "answer": "Answer",
+        "question_id": "mapped", "answer": "Answer",
         "citations": [{"source_id": "doc", "chunk_id": "part", "text": "excerpt"}],
         "retrieval": {"documents_considered": 2, "chunks_returned": 1},
         "model": {"provider": "test", "name": "model", "input_tokens": 3, "output_tokens": 4},
     }
 
     class MappingWorkflow(QuestionWorkflow):
-        def submit_question(self, question, *, correlation_id=None, idempotency_key=None):
+        def submit_question(self, question, *, request_id=None, idempotency_key=None):
             return result
 
     workflow = MappingWorkflow(store_factory())

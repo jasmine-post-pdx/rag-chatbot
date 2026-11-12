@@ -25,7 +25,7 @@ def test_lifespan_shares_and_closes_store(monkeypatch):
         assert main.app.state.question_job_store is stores[0]
         assert client.get("/ready").json() == {"status": "ready"}
         submitted = client.post("/v1/questions", json={"question": "Hello"}).json()
-        assert stores[0].get_job(submitted["request_id"]).result.answer == submitted["answer"]
+        assert stores[0].get_job(submitted["question_id"]).result.answer == submitted["answer"]
 
     assert main.app.state.question_workflow is None
     assert main.app.state.question_job_store is None

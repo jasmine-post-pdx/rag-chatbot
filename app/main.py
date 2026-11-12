@@ -127,7 +127,7 @@ async def internal_error_handler(request: Request, exc: Exception) -> JSONRespon
             "Question processing failed",
             extra={
                 "request_id": request.state.request_id,
-                "question_id": exc.request_id,
+                "question_id": exc.question_id,
                 "error_category": "processing_error",
                 "exception_type": exc.exception_type,
             },
@@ -137,7 +137,7 @@ async def internal_error_handler(request: Request, exc: Exception) -> JSONRespon
             "Question failure state persistence failed",
             extra={
                 "request_id": request.state.request_id,
-                "question_id": exc.request_id,
+                "question_id": exc.question_id,
                 "error_category": "server",
                 "exception_type": exc.exception_type,
             },
@@ -156,5 +156,5 @@ async def internal_error_handler(request: Request, exc: Exception) -> JSONRespon
     )
     response.headers[REQUEST_ID_HEADER] = request.state.request_id
     if isinstance(exc, QuestionProcessingError):
-        response.headers["x-question-id"] = exc.request_id
+        response.headers["x-question-id"] = exc.question_id
     return response

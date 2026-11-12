@@ -50,7 +50,7 @@ class ModelMetricsResponse(BaseModel):
 class QuestionResultResponse(BaseModel):
     """Completed answer and supporting metadata."""
 
-    request_id: str
+    question_id: str
     answer: str
     citations: list[CitationResponse]
     retrieval: RetrievalMetricsResponse
@@ -61,12 +61,12 @@ class QuestionJobResponse(BaseModel):
     """Public response shape for polling a submitted question.
 
     Attributes:
-        request_id: Unique identifier of the question job.
+        question_id: Unique identifier of the question job.
         status: Whether processing is pending, completed, or failed.
         result: Completed answer and metadata, or ``None`` while pending or failed.
     """
 
-    request_id: str
+    question_id: str
     status: Literal["pending", "completed", "failed"]
     result: QuestionResultResponse | None = None
     # Controlled category only; provider exception details stay in server logs.

@@ -70,11 +70,11 @@ def test_fake_answerer_returns_and_persists_api_result(
         assert response.status_code == 200
         submitted = response.json()
 
-        request_id = submitted["request_id"]
-        polled = client.get(f"/v1/questions/{request_id}")
+        question_id = submitted["question_id"]
+        polled = client.get(f"/v1/questions/{question_id}")
 
     assert submitted == {
-        "request_id": request_id,
+        "question_id": question_id,
         "answer": "Fake answer to: What is RAG?",
         "citations": [],
         "retrieval": {"documents_considered": 0, "chunks_returned": 0},
@@ -87,7 +87,7 @@ def test_fake_answerer_returns_and_persists_api_result(
     }
     assert polled.status_code == 200
     assert polled.json() == {
-        "request_id": request_id,
+        "question_id": question_id,
         "status": "completed",
         "result": submitted,
         "error_category": None,

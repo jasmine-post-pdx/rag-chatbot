@@ -193,7 +193,7 @@ uvicorn app.main:app --reload
 | `GET` | `/health` | Report that the process is running. |
 | `GET` | `/ready` | Report that the API is ready to accept requests. |
 | `POST` | `/v1/questions` | Submit a question and get a completed result. |
-| `GET` | `/v1/questions/{request_id}` | Retrieve the status and result of a submitted question. |
+| `GET` | `/v1/questions/{question_id}` | Retrieve the status and result of a submitted question. |
 
 Submit a question:
 
@@ -207,7 +207,7 @@ Response:
 
 ```json
 {
-  "request_id": "<uuid>",
+  "question_id": "<uuid>",
   "answer": "This is a placeholder answer for: What is RAG?",
   "citations": [],
   "retrieval": {"documents_considered": 0, "chunks_returned": 0},
@@ -223,7 +223,7 @@ Response:
 Retrieve the stored job:
 
 ```bash
-curl http://localhost:8000/v1/questions/<request_id>
+curl http://localhost:8000/v1/questions/<question_id>
 ```
 
 Clients can send an optional `Idempotency-Key` header to reuse a saved terminal
@@ -299,14 +299,14 @@ before reopening traffic so expired idempotency keys are removed.
 
 ### Request logging
 
-Every request is logged with a correlation ID, HTTP method, route, response
+Every request is logged with its request ID, HTTP method, route, response
 status, and elapsed time:
 
 ```
 INFO:     Request completed request_id=<uuid> method=POST route=/v1/questions status=200 elapsed_ms=12.345
 ```
 
-You can provide your own correlation ID in the `x-request-id` header; otherwise
+You can provide your own request ID in the `x-request-id` header; otherwise
 the API generates one and returns it in the response:
 
 ```bash
@@ -325,8 +325,9 @@ INFO:     Request completed request_id=<uuid> method=POST route=/v1/questions st
 ```
 
 If question processing fails after the job is saved, the generic `500` response
-also includes an `x-question-id` header. Use that ID to poll
-`GET /v1/questions/{request_id}`; the job response reports `status: "failed"`
+also includes an `x-question-id` header. That header is the `question_id`. Use
+it to poll `GET /v1/questions/{question_id}`; the job response reports
+`status: "failed"`
 and `error_category: "processing_error"` without exposing provider exception
 details.
 

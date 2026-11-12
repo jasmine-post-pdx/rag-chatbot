@@ -18,9 +18,9 @@ from app.services.question_workflow import QuestionProcessingError, QuestionWork
 from app.stores.sqlite import SQLiteQuestionJobStore
 
 
-def _result(request_id: str) -> QuestionResult:
+def _result(question_id: str) -> QuestionResult:
     return QuestionResult(
-        request_id=request_id,
+        question_id=question_id,
         answer="A test answer",
         citations=[],
         retrieval=RetrievalMetrics(documents_considered=0, chunks_returned=0),
@@ -39,11 +39,11 @@ def test_create_job_stores_pending_job(store_factory):
 
     job = store.create_job("req-1")
 
-    assert job == QuestionJob(request_id="req-1", status="pending")
+    assert job == QuestionJob(question_id="req-1", status="pending")
     assert store.get_job("req-1") == job
 
 
-def test_create_job_duplicate_request_id_raises(store_factory):
+def test_create_job_duplicate_question_id_raises(store_factory):
     """Verify creating a duplicate job raises a value error."""
     store = store_factory(":memory:")
     store.create_job("req-1")
@@ -64,7 +64,7 @@ def test_complete_job_persists_supplied_result(store_factory):
     assert store.get_job("req-1") == completed
 
 
-def test_complete_job_unknown_request_id_raises(store_factory):
+def test_complete_job_unknown_question_id_raises(store_factory):
     """Verify completion fails when the job does not exist."""
     store = store_factory(":memory:")
 
@@ -72,12 +72,12 @@ def test_complete_job_unknown_request_id_raises(store_factory):
         store.complete_job("missing", _result("missing"))
 
 
-def test_complete_job_rejects_result_for_different_request_id(store_factory):
+def test_complete_job_rejects_result_for_different_question_id(store_factory):
     """Verify mismatched results are rejected without changing the pending job."""
     store = store_factory(":memory:")
     store.create_job("req-1")
 
-    with pytest.raises(ValueError, match="Result request ID does not match job"):
+    with pytest.raises(ValueError, match="Result question ID does not match job"):
         store.complete_job("req-1", _result("req-2"))
 
     job = store.get_job("req-1")
@@ -94,12 +94,12 @@ def test_fail_job_persists_safe_error_category(store_factory):
     failed = store.fail_job("req-1", "processing_error")
 
     assert failed == QuestionJob(
-        request_id="req-1", status="failed", error_category="processing_error"
+        question_id="req-1", status="failed", error_category="processing_error"
     )
     assert store.get_job("req-1") == failed
 
 
-def test_fail_job_unknown_request_id_raises(store_factory):
+def test_fail_job_unknown_question_id_raises(store_factory):
     """Verify failure persistence rejects an unknown job ID."""
     store = store_factory(":memory:")
 
@@ -107,7 +107,7 @@ def test_fail_job_unknown_request_id_raises(store_factory):
         store.fail_job("missing", "processing_error")
 
 
-def test_get_job_unknown_request_id_returns_none(store_factory):
+def test_get_job_unknown_question_id_returns_none(store_factory):
     """Verify looking up an unknown job returns None."""
     store = store_factory(":memory:")
 
@@ -192,7 +192,7 @@ def legacy_question_database(tmp_path):
 def test_legacy_job_remains_readable_after_upgrade_and_reopen(
     legacy_question_database, store_factory
 ):
-    """Upgrade the old table without rewriting its serialized jobs."""
+    """Upgrade the old table and store the job ID as question_id."""
     db_path, job_json = legacy_question_database
     store = store_factory(str(db_path))
     job = store.get_job("legacy-1")
@@ -203,12 +203,12 @@ def test_legacy_job_remains_readable_after_upgrade_and_reopen(
     assert job.result.answer == "Old answer"
     assert job.result.citations[0].text == "excerpt"
     row = store._conn.execute(
-        "SELECT job_json, created_at, idempotency_key_hash, request_fingerprint "
-        "FROM question_jobs WHERE request_id = ?",
+        "SELECT job_json, created_at, idempotency_key_hash, question_fingerprint "
+        "FROM question_jobs WHERE question_id = ?",
         ("legacy-1",),
     ).fetchone()
     assert row is not None
-    assert row[0] == job_json
+    assert row[0] == job_json.replace('"request_id":', '"question_id":')
     assert row[1]
     assert row[2:] == (None, None)
     store.create_job("new-job")
@@ -216,7 +216,7 @@ def test_legacy_job_remains_readable_after_upgrade_and_reopen(
 
     reopened = store_factory(str(db_path))
     assert reopened.get_job("legacy-1") == job
-    assert reopened.get_job("new-job") == QuestionJob(request_id="new-job", status="pending")
+    assert reopened.get_job("new-job") == QuestionJob(question_id="new-job", status="pending")
 
 
 def test_store_closes_connection_if_table_setup_fails(monkeypatch):
@@ -242,18 +242,18 @@ def test_idempotency_records_survive_reopen_and_reject_conflicts(tmp_path, store
     db_path = str(tmp_path / "questions.db")
     store = store_factory(db_path)
     job = store.create_completed_job(
-        "first", _result("first"), idempotency_key_hash="key", request_fingerprint="question"
+        "first", _result("first"), idempotency_key_hash="key", question_fingerprint="question"
     )
     store.close()
 
     reopened = store_factory(db_path)
     assert reopened.get_by_idempotency_key("key") == (job, "question")
     assert reopened.create_completed_job(
-        "second", _result("second"), idempotency_key_hash="key", request_fingerprint="question"
+        "second", _result("second"), idempotency_key_hash="key", question_fingerprint="question"
     ) == job
     with pytest.raises(IdempotencyKeyReuseError):
         reopened.create_completed_job(
-            "third", _result("third"), idempotency_key_hash="key", request_fingerprint="other"
+            "third", _result("third"), idempotency_key_hash="key", question_fingerprint="other"
         )
     assert reopened.get_job("second") is None
     assert reopened.get_job("third") is None
@@ -268,26 +268,26 @@ def test_submission_generates_distinct_job_ids_and_forwards_correlation(store_fa
         def __init__(self):
             self.calls = []
 
-        def process(self, request_id, question, *, correlation_id=None):
-            self.calls.append((request_id, question, correlation_id))
-            return _result(request_id)
+        def process(self, question_id, question, *, request_id=None):
+            self.calls.append((question_id, question, request_id))
+            return _result(question_id)
 
     store = store_factory(":memory:")
     processor = RecordingProcessor()
     workflow = QuestionWorkflow(store, processor)
 
-    first = workflow.submit_question("What is RAG?", correlation_id="http-request")
-    second = workflow.submit_question("What is RAG?", correlation_id="http-request")
+    first = workflow.submit_question("What is RAG?", request_id="http-request")
+    second = workflow.submit_question("What is RAG?", request_id="http-request")
 
-    assert str(UUID(first.request_id, version=4)) == first.request_id
-    assert str(UUID(second.request_id, version=4)) == second.request_id
-    assert first.request_id != second.request_id
+    assert str(UUID(first.question_id, version=4)) == first.question_id
+    assert str(UUID(second.question_id, version=4)) == second.question_id
+    assert first.question_id != second.question_id
     assert processor.calls == [
-        (first.request_id, "What is RAG?", "http-request"),
-        (second.request_id, "What is RAG?", "http-request"),
+        (first.question_id, "What is RAG?", "http-request"),
+        (second.question_id, "What is RAG?", "http-request"),
     ]
-    assert store.get_job(first.request_id).result == first
-    assert store.get_job(second.request_id).result == second
+    assert store.get_job(first.question_id).result == first
+    assert store.get_job(second.question_id).result == second
 
 
 def test_submission_reuses_idempotent_result_without_reprocessing(store_factory):
@@ -296,9 +296,9 @@ def test_submission_reuses_idempotent_result_without_reprocessing(store_factory)
         def __init__(self):
             self.calls = 0
 
-        def process(self, request_id, question, *, correlation_id=None):
+        def process(self, question_id, question, *, request_id=None):
             self.calls += 1
-            return _result(request_id)
+            return _result(question_id)
 
     processor = RecordingProcessor()
     workflow = QuestionWorkflow(store_factory(":memory:"), processor)
@@ -317,15 +317,15 @@ def test_submission_rejects_incomplete_cached_job(store_factory, job_status):
     """Incomplete saved jobs yield the same safe, pollable processing error."""
     store = store_factory(":memory:")
     store._insert_job(
-        QuestionJob(request_id="existing-job", status=job_status),
+        QuestionJob(question_id="existing-job", status=job_status),
         idempotency_key_hash=hashlib.sha256(b"key").hexdigest(),
-        request_fingerprint=hashlib.sha256(b"Question").hexdigest(),
+        question_fingerprint=hashlib.sha256(b"Question").hexdigest(),
     )
     workflow = QuestionWorkflow(store)
     with pytest.raises(QuestionProcessingError) as error:
         workflow.submit_question("Question", idempotency_key="key")
 
-    assert error.value.request_id == "existing-job"
+    assert error.value.question_id == "existing-job"
     assert error.value.exception_type == "PreviousAttemptIncomplete"
 
 
@@ -337,17 +337,17 @@ def test_submission_reuses_winning_job_after_idempotency_race(store_factory, pro
             return None
 
     class Processor:
-        def process(self, request_id, question, *, correlation_id=None):
+        def process(self, question_id, question, *, request_id=None):
             if processor_fails:
                 raise TimeoutError("provider failure")
-            return _result(request_id)
+            return _result(question_id)
 
     store = store_factory(store_type=RacingStore)
     original = _result("winner")
     store.create_completed_job(
         "winner", original,
         idempotency_key_hash=hashlib.sha256(b"key").hexdigest(),
-        request_fingerprint=hashlib.sha256(b"Question").hexdigest(),
+        question_fingerprint=hashlib.sha256(b"Question").hexdigest(),
     )
     workflow = QuestionWorkflow(store, Processor())
 
@@ -358,24 +358,24 @@ def test_submission_reuses_winning_job_after_idempotency_race(store_factory, pro
 def test_submission_persists_failed_job_with_generated_id(store_factory):
     """The ID exposed on a processing failure identifies the persisted failed job."""
     class FailingProcessor:
-        def process(self, request_id, question, *, correlation_id=None):
+        def process(self, question_id, question, *, request_id=None):
             raise TimeoutError("sensitive provider details")
 
     store = store_factory(":memory:")
     workflow = QuestionWorkflow(store, FailingProcessor())
     with pytest.raises(QuestionProcessingError) as error:
-        workflow.submit_question("Question", correlation_id="http-request")
+        workflow.submit_question("Question", request_id="http-request")
 
-    assert str(UUID(error.value.request_id, version=4)) == error.value.request_id
+    assert str(UUID(error.value.question_id, version=4)) == error.value.question_id
     assert error.value.exception_type == "TimeoutError"
     assert error.value.__context__ is None
-    assert store.get_job(error.value.request_id).status == "failed"
+    assert store.get_job(error.value.question_id).status == "failed"
 
 
 def test_workflow_completes_job_with_placeholder_result(store_factory):
     """Verify the default processor completes a job with its placeholder result."""
     store = store_factory(":memory:")
-    workflow = QuestionWorkflow(store, job_id_factory=lambda: "req-1")
+    workflow = QuestionWorkflow(store, question_id_factory=lambda: "req-1")
 
     result = workflow.submit_question("What is RAG?")
 
@@ -395,17 +395,17 @@ def test_workflow_passes_question_to_processor_and_persists_its_result(store_fac
 
         def process(
             self,
-            request_id: str,
+            question_id: str,
             question: str,
             *,
-            correlation_id: str | None = None,
+            request_id: str | None = None,
         ) -> QuestionResult:
-            self.call = (request_id, question)
+            self.call = (question_id, question)
             return expected
 
     store = store_factory(":memory:")
     processor = RecordingProcessor()
-    workflow = QuestionWorkflow(store, processor, job_id_factory=lambda: "req-custom")
+    workflow = QuestionWorkflow(store, processor, question_id_factory=lambda: "req-custom")
 
     result = workflow.submit_question("Use my processor")
 
@@ -422,15 +422,15 @@ def test_workflow_persists_failure_without_preserving_processor_exception(store_
     class FailingProcessor:
         def process(
             self,
-            request_id: str,
+            question_id: str,
             question: str,
             *,
-            correlation_id: str | None = None,
+            request_id: str | None = None,
         ) -> QuestionResult:
             raise TimeoutError("private provider endpoint and credential detail")
 
     store = store_factory(":memory:")
-    workflow = QuestionWorkflow(store, FailingProcessor(), job_id_factory=lambda: "req-1")
+    workflow = QuestionWorkflow(store, FailingProcessor(), question_id_factory=lambda: "req-1")
 
     with pytest.raises(QuestionProcessingError) as error:
         workflow.submit_question("What is RAG?")
@@ -451,15 +451,15 @@ def test_workflow_marks_mismatched_processor_result_as_failed(store_factory):
     class MismatchedProcessor:
         def process(
             self,
-            request_id: str,
+            question_id: str,
             question: str,
             *,
-            correlation_id: str | None = None,
+            request_id: str | None = None,
         ) -> QuestionResult:
             return _result("different-request")
 
     store = store_factory(":memory:")
-    workflow = QuestionWorkflow(store, MismatchedProcessor(), job_id_factory=lambda: "req-1")
+    workflow = QuestionWorkflow(store, MismatchedProcessor(), question_id_factory=lambda: "req-1")
 
     with pytest.raises(QuestionProcessingError) as error:
         workflow.submit_question("What is RAG?")

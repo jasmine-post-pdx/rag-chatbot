@@ -76,7 +76,7 @@ def test_request_id_header_is_returned_on_server_error(client, store_factory):
     class FailingStore(SQLiteQuestionJobStore):
         """Store that raises an error when creating a completed job."""
 
-        def create_completed_job(self, request_id, result, **kwargs):
+        def create_completed_job(self, question_id, result, **kwargs):
             """Raise a runtime error to simulate a storage failure."""
             raise RuntimeError("simulated failure")
 
@@ -119,11 +119,11 @@ def test_server_error_logs_category(client, caplog, store_factory):
     class FailingStore(SQLiteQuestionJobStore):
         """Store that raises an error when creating a completed job."""
 
-        def create_completed_job(self, request_id, result, **kwargs):
+        def create_completed_job(self, question_id, result, **kwargs):
             """Raise a runtime error to simulate a storage failure.
 
             Args:
-                request_id: Unique identifier for the job (unused).
+                question_id: Unique identifier for the job (unused).
                 result: The completed question result (unused).
             """
             raise RuntimeError("database password and stack details")
@@ -160,7 +160,7 @@ def test_internal_error_handler_logs_exception(client, caplog, store_factory):
     class FailingStore(SQLiteQuestionJobStore):
         """Store that raises an error when creating a completed job."""
 
-        def create_completed_job(self, request_id, result, **kwargs):
+        def create_completed_job(self, question_id, result, **kwargs):
             """Raise a runtime error with sensitive details."""
             raise RuntimeError("database password=hidden and token=hidden-too")
 
