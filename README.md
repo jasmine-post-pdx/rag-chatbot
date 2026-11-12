@@ -234,6 +234,12 @@ Response:
 }
 ```
 
+`input_tokens` and `output_tokens` are null when a provider omits usage. The
+local placeholder still reports zero because it does not call a model. Finish
+status, refusal text, and the provider response ID stay off this response.
+Status and the provider response ID are written to the generation log; the
+question and refusal text are not.
+
 Retrieve the stored job:
 
 ```bash

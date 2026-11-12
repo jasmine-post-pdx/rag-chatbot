@@ -6,21 +6,30 @@ from pydantic import BaseModel, Field
 
 
 class GenerationResult(BaseModel):
-    """Generated answer and usage reported by the model provider.
+    """Generated answer and the metadata the provider actually reported.
 
     Attributes:
-        answer: Text produced by the model.
+        answer: Text produced by the model, or the refusal text when the model
+            returned no output text.
         provider: Provider identifier, such as ``"openai"`` or ``"local"``.
         model: Model identifier reported for the generation.
-        input_tokens: Actual number of input tokens reported by the provider.
-        output_tokens: Actual number of output tokens reported by the provider.
+        input_tokens: Input tokens reported by the provider, or ``None`` when
+            the provider omitted usage.
+        output_tokens: Output tokens reported by the provider, or ``None`` when
+            the provider omitted usage.
+        finish_status: Provider finish status, such as ``"completed"``.
+        refusal: Refusal text when the provider returned one.
+        provider_request_id: Provider response ID for this generation.
     """
 
     answer: str
     provider: str
     model: str
-    input_tokens: int = Field(ge=0)
-    output_tokens: int = Field(ge=0)
+    input_tokens: int | None = Field(ge=0)
+    output_tokens: int | None = Field(ge=0)
+    finish_status: str | None = None
+    refusal: str | None = None
+    provider_request_id: str | None = None
 
 
 class LLMClient(Protocol):
@@ -182,11 +191,106 @@ class OpenAIResponsesClient:
             MissingAPIKeyError: If ``OPENAI_API_KEY`` is not set.
         """
         response = self._get_client().responses.create(**self._request_body(question))
-        usage = response.usage
+        refusal = _refusal_text(response)
+        reported_model = getattr(response, "model", None)
+        if not isinstance(reported_model, str) or reported_model == "":
+            reported_model = self._model
         return GenerationResult(
-            answer=response.output_text,
+            answer=_answer_text(response, refusal),
             provider="openai",
-            model=response.model or self._model,
-            input_tokens=usage.input_tokens if usage else 0,
-            output_tokens=usage.output_tokens if usage else 0,
+            model=reported_model,
+            input_tokens=_reported_token_count(getattr(response, "usage", None), "input_tokens"),
+            output_tokens=_reported_token_count(getattr(response, "usage", None), "output_tokens"),
+            finish_status=_finish_status(response),
+            refusal=refusal,
+            provider_request_id=_provider_request_id(response),
         )
+
+
+def _reported_token_count(usage: object | None, name: str) -> int | None:
+    """Return one usage count only when the provider reported it.
+
+    Args:
+        usage: Provider usage object, or ``None`` when usage was omitted.
+        name: Usage attribute to read, such as ``"input_tokens"``.
+
+    Returns:
+        The reported count, including zero. ``None`` when usage or the count
+        was omitted.
+    """
+    if usage is None:
+        return None
+    if isinstance(usage, dict):
+        value = usage.get(name)
+    else:
+        value = getattr(usage, name, None)
+    if value is None:
+        return None
+    return int(value)
+
+
+def _finish_status(response: object) -> str | None:
+    """Return the provider finish status string, when the response has one."""
+    status = getattr(response, "status", None)
+    if status is None and isinstance(response, dict):
+        status = response.get("status")
+    if status is None:
+        return None
+    if isinstance(status, str):
+        return status
+    value = getattr(status, "value", None)
+    if isinstance(value, str):
+        return value
+    return str(status)
+
+
+def _provider_request_id(response: object) -> str | None:
+    """Return the provider response ID, when the response has one."""
+    request_id = getattr(response, "id", None)
+    if request_id is None and isinstance(response, dict):
+        request_id = response.get("id")
+    if request_id is None:
+        return None
+    return str(request_id)
+
+
+def _refusal_text(response: object) -> str | None:
+    """Collect refusal text from Responses API output content."""
+    output = getattr(response, "output", None)
+    if output is None and isinstance(response, dict):
+        output = response.get("output")
+    if output is None:
+        return None
+    refusals: list[str] = []
+    for item in output:
+        content = _mapping_or_attr(item, "content") or []
+        for part in content:
+            if _mapping_or_attr(part, "type") != "refusal":
+                continue
+            text = _mapping_or_attr(part, "refusal")
+            if isinstance(text, str) and text:
+                refusals.append(text)
+    if not refusals:
+        return None
+    return "\n".join(refusals)
+
+
+def _answer_text(response: object, refusal: str | None) -> str:
+    """Return output text, or the refusal when the provider sent no output text."""
+    output_text = getattr(response, "output_text", None)
+    if output_text is None and isinstance(response, dict):
+        output_text = response.get("output_text")
+    if isinstance(output_text, str) and output_text != "":
+        return output_text
+    if refusal is not None:
+        return refusal
+    if isinstance(output_text, str):
+        return output_text
+    return ""
+
+
+def _mapping_or_attr(value: object, name: str) -> object:
+    """Read a field from a mapping or an object."""
+    if isinstance(value, dict):
+        return value.get(name)
+    return getattr(value, name, None)

@@ -123,6 +123,8 @@ class LLMQuestionProcessor:
                 "elapsed_ms": elapsed_ms,
                 "input_tokens": generation.input_tokens,
                 "output_tokens": generation.output_tokens,
+                "finish_status": generation.finish_status,
+                "provider_request_id": generation.provider_request_id,
             },
         )
         return QuestionResult(

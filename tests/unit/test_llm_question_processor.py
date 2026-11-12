@@ -103,6 +103,60 @@ def test_processor_logs_generation_metadata_with_correlation_and_question_ids(ca
     assert record.output_tokens == 34
 
 
+def test_processor_maps_missing_usage_and_logs_status_without_refusal(caplog):
+    """Preserve null usage and log status and provider ID, not refusal text.
+
+    Args:
+        caplog: Pytest fixture used to capture structured log records.
+    """
+
+    class MissingUsageClient:
+        """Return a refusal with no reported token usage."""
+
+        provider = "test-provider"
+        model = "test-model"
+
+        def generate(self, question: str) -> GenerationResult:
+            """Return a result whose provider omitted token usage."""
+            return GenerationResult(
+                answer="Cannot answer that.",
+                provider="test-provider",
+                model="test-model",
+                input_tokens=None,
+                output_tokens=None,
+                finish_status="incomplete",
+                refusal="Cannot answer that.",
+                provider_request_id="resp_refused",
+            )
+
+    caplog.set_level(logging.INFO, logger="app.services.question_processor")
+    result = LLMQuestionProcessor(MissingUsageClient()).process(
+        "question-job-3",
+        "private prompt text",
+        request_id="http-request-3",
+    )
+
+    assert result.model == ModelMetrics(
+        provider="test-provider",
+        name="test-model",
+        input_tokens=None,
+        output_tokens=None,
+    )
+    record = next(
+        record
+        for record in caplog.records
+        if record.message == "Generation completed"
+    )
+    assert record.input_tokens is None
+    assert record.output_tokens is None
+    assert record.finish_status == "incomplete"
+    assert record.provider_request_id == "resp_refused"
+    assert "private prompt text" not in record.message
+    assert "Cannot answer that." not in record.message
+    formatted = logging.Formatter().format(record)
+    assert "Cannot answer that." not in formatted
+
+
 def test_processor_logs_sanitized_failure_category_without_question(caplog):
     """Log a safe categorized provider failure without exposing prompt text.
 

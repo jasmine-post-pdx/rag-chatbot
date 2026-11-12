@@ -45,5 +45,5 @@ def test_openai_responses_api_smoke():
     assert result.answer.strip()
     assert result.provider == "openai"
     assert result.model
-    assert result.input_tokens >= 0
-    assert result.output_tokens >= 0
+    assert result.input_tokens is None or result.input_tokens >= 0
+    assert result.output_tokens is None or result.output_tokens >= 0

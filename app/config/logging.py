@@ -35,6 +35,8 @@ class RequestFormatter(logging.Formatter):
         "model",
         "input_tokens",
         "output_tokens",
+        "finish_status",
+        "provider_request_id",
         "error_category",
         "exception_type",
     ]

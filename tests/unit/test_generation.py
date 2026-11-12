@@ -85,22 +85,26 @@ class _FakeResponses:
     def __init__(self) -> None:
         """Initialize the fake with no recorded calls."""
         self.calls: list[dict] = []
+        self.response = SimpleNamespace(
+            output_text="An OpenAI answer",
+            model="gpt-test-2026",
+            usage=SimpleNamespace(input_tokens=7, output_tokens=9),
+            status="completed",
+            id="resp_ok",
+            output=[],
+        )
 
     def create(self, **kwargs):
-        """Record the request and return a response with usage.
+        """Record the request and return the configured response.
 
         Args:
             **kwargs: Request parameters, such as ``model`` and ``input``.
 
         Returns:
-            An object shaped like an SDK response, with output text, model, and usage.
+            An object shaped like an SDK response.
         """
         self.calls.append(kwargs)
-        return SimpleNamespace(
-            output_text="An OpenAI answer",
-            model="gpt-test-2026",
-            usage=SimpleNamespace(input_tokens=7, output_tokens=9),
-        )
+        return self.response
 
 
 def test_openai_client_can_be_constructed_without_api_key(monkeypatch):
@@ -136,7 +140,63 @@ def test_openai_client_maps_response_using_injected_sdk_client(monkeypatch):
         model="gpt-test-2026",
         input_tokens=7,
         output_tokens=9,
+        finish_status="completed",
+        refusal=None,
+        provider_request_id="resp_ok",
     )
+
+
+def test_openai_client_leaves_usage_null_when_provider_omits_it():
+    """Do not invent token counts when the provider sends no usage."""
+    responses = _FakeResponses()
+    responses.response = SimpleNamespace(
+        output_text="An OpenAI answer",
+        model="gpt-test-2026",
+        usage=None,
+        status="completed",
+        id="resp_123",
+        output=[],
+    )
+    client = OpenAIResponsesClient(
+        "gpt-test", client=SimpleNamespace(responses=responses)
+    )
+
+    result = client.generate("What is RAG?")
+
+    assert result.input_tokens is None
+    assert result.output_tokens is None
+    assert result.finish_status == "completed"
+    assert result.provider_request_id == "resp_123"
+    assert result.refusal is None
+
+
+def test_openai_client_maps_refusal_when_output_text_is_empty():
+    """Keep refusal text and use it as the answer when no output text was returned."""
+    responses = _FakeResponses()
+    responses.response = SimpleNamespace(
+        output_text="",
+        model="gpt-test-2026",
+        usage=SimpleNamespace(input_tokens=4, output_tokens=None),
+        status="incomplete",
+        id="resp_refused",
+        output=[
+            SimpleNamespace(
+                content=[SimpleNamespace(type="refusal", refusal="Cannot answer that.")]
+            )
+        ],
+    )
+    client = OpenAIResponsesClient(
+        "gpt-test", client=SimpleNamespace(responses=responses)
+    )
+
+    result = client.generate("What is RAG?")
+
+    assert result.answer == "Cannot answer that."
+    assert result.refusal == "Cannot answer that."
+    assert result.finish_status == "incomplete"
+    assert result.provider_request_id == "resp_refused"
+    assert result.input_tokens == 4
+    assert result.output_tokens is None
 
 
 def test_openai_client_sends_instructions_and_output_cap_when_configured():

@@ -25,12 +25,15 @@ class RetrievalMetrics(BaseModel):
 
 
 class ModelMetrics(BaseModel):
-    """Provider, model, and token usage for answer generation."""
+    """Provider, model, and token usage for answer generation.
+
+    Token counts are null when the provider did not report usage.
+    """
 
     provider: str
     name: str
-    input_tokens: int
-    output_tokens: int
+    input_tokens: int | None
+    output_tokens: int | None
 
 
 class QuestionResult(BaseModel):
