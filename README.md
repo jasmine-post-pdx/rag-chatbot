@@ -112,15 +112,16 @@ Key settings include the SQLite job-store path (`QUESTIONS_DB_PATH`), archive
 and backup directories (`QUESTIONS_ARCHIVE_DIR`, `QUESTIONS_BACKUP_DIR`), live
 and archive retention in days, the Postgres/pgvector connection details, and the
 application log level (`LOG_LEVEL`, default `INFO`). `GENERATION_PROVIDER`
-selects how questions are answered: `local` (the default) returns placeholder
-answers, and `openai` sends
-the question directly to `GENERATION_MODEL` through the Responses API, without
-retrieval. Any other value fails at startup. `OPENAI_API_KEY` is loaded through
-Pydantic Settings from the environment or `.env` file, stored as a secret
-setting, and has no credential default. If supplied but empty or whitespace-only,
-settings validation fails during startup. The app can start without the
-variable, but an OpenAI-backed question fails until a key is configured. Add
-this to `.env` when using `GENERATION_PROVIDER=openai`:
+selects how questions are answered. `local` is the default and the stand-in
+for a local model: it returns a placeholder answer and does not call a
+provider. `openai` sends the question to `GENERATION_MODEL` through the
+Responses API, without retrieval. Any other value fails at startup.
+`OPENAI_API_KEY` is loaded through Pydantic Settings from the environment or
+`.env` file, stored as a secret setting, and has no credential default. If
+supplied but empty or whitespace-only, settings validation fails during
+startup. The app can start without the variable, but an OpenAI-backed
+question fails until a key is configured. Add this to `.env` when using
+`GENERATION_PROVIDER=openai`:
 
 ```dotenv
 OPENAI_API_KEY=your-key-here
@@ -129,16 +130,27 @@ OPENAI_API_KEY=your-key-here
 Do not commit real credentials to the repository.
 
 Local runs load all of these settings from environment variables or `.env`.
-The OpenAI adapter uses `GENERATION_TIMEOUT_SECONDS` (default `30`) as its
-client timeout. It sends `GENERATION_INSTRUCTIONS` and
-`GENERATION_MAX_OUTPUT_TOKENS` when they are set, and omits each one when it
-is unset. The SDK client is created with `max_retries=0`. The application
-retries HTTP 429, 500, 502, 503, and 504, plus timeout and connection
-failures, using exponential backoff with jitter. It does not retry
-authentication failures or bad requests. `GENERATION_MAX_RETRIES` (default
-`2`) is the number of extra attempts. Each extra attempt is a new Responses
-API create. That call is not idempotent, so a retry can bill another
-generation when an earlier request reached the provider.
+To use the local placeholder instead of OpenAI, set `GENERATION_PROVIDER=local`
+or leave it unset.
+
+The OpenAI client timeout is `GENERATION_TIMEOUT_SECONDS` (default `30`).
+That limit applies to each attempt. Retries can make the total wait longer
+than one timeout. `GENERATION_MAX_OUTPUT_TOKENS`, when set, is sent as
+`max_output_tokens` and caps completion tokens. Leave it unset to omit the
+cap. `GENERATION_INSTRUCTIONS`, when set, is sent separately from the
+question. Leave it unset to send no extra instructions.
+
+The SDK client is created with `max_retries=0`, so the SDK does not retry on
+its own. The application retries HTTP 429, 500, 502, 503, and 504, plus
+timeouts and connection failures. It does not retry authentication failures
+or bad requests. `GENERATION_MAX_RETRIES` (default `2`) is the number of
+extra attempts, so the default cap is three provider calls. The wait before
+each retry is exponential backoff with jitter, starting at half a second and
+capping at eight seconds. Each extra attempt is a new Responses API create.
+That call is not idempotent, so a retry can bill another generation when an
+earlier request reached the provider. `input_tokens` and `output_tokens` are
+null when that provider omits usage. The example below shows the local
+placeholder, which reports zero because it does not call a model.
 
 Docker Compose sets `QUESTIONS_DB_PATH` to `/app/data/questions.db` and forwards
 the archive directory, backup directory, live and archive retention, and
@@ -238,11 +250,10 @@ Response:
 }
 ```
 
-`input_tokens` and `output_tokens` are null when a provider omits usage. The
-local placeholder still reports zero because it does not call a model. Finish
-status, refusal text, and the provider response ID stay off this response.
-Status and the provider response ID are written to the generation log; the
-question and refusal text are not.
+Finish status, refusal text, and the provider response ID stay off this
+response. Status and the provider response ID are written to the generation
+log; the question and refusal text are not. A refusal with no output text is
+returned as the answer.
 
 Retrieve the stored job:
 
