@@ -23,7 +23,7 @@ client
 | `app/routers/`, `app/dependencies/` | Health, readiness, and question endpoints. Question routes use the workflow; readiness uses the job store. |
 | `app/config/` | Environment-based settings and standard-library logging configuration. |
 | `app/services/question_workflow.py` | Generates job IDs, coordinates answer processing, idempotency, and success or failure persistence. |
-| `app/services/question_processor.py` | Processor interface and placeholder implementation; the answerer also supports a configured model provider. |
+| `app/services/question_processor.py` | Processor port, placeholder and LLM implementations, and provider selection. |
 | `app/stores/` | `QuestionJobStore` protocol and SQLite-backed implementation. |
 | `scripts/question_job_maintenance.py` | SQLite snapshots, tiered backup rotation, and terminal-job archiving. |
 | `app/domain/` | Internal job and answer DTOs, plus domain errors such as idempotency-key reuse. |

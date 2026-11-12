@@ -16,7 +16,7 @@ from app.config.settings import settings
 from app.middleware import REQUEST_ID_HEADER, RequestLogMiddleware
 from app.routers import health, questions
 from app.schemas.errors import ServerErrorResponse, ValidationErrorResponse
-from app.services.processor_factory import build_question_processor
+from app.services.question_processor import build_question_processor
 from app.services.question_workflow import (
     QuestionProcessingError,
     QuestionStatePersistenceError,
