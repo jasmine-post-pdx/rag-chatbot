@@ -12,7 +12,7 @@ import sys
 from typing import ClassVar
 from uuid import uuid4
 
-from app.core.config import settings
+from app.config.settings import settings
 
 
 class RequestFormatter(logging.Formatter):

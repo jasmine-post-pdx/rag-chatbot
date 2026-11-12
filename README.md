@@ -1,8 +1,8 @@
 # rag-chatbot — RAG Engineering Lab
 
 > Status: This is an active learning project. The HTTP API, request/response
-> schemas, and SQLite-backed question-job storage are implemented, but the
-> retrieval and generation stages still return placeholders. I consider the
+> schemas, SQLite-backed question-job storage, and optional OpenAI generation
+> are implemented, but retrieval is still a placeholder. I consider the
 > current milestone complete enough to build on: the structure is testable,
 > documented, and ready for real RAG adapters to be dropped in.
 
@@ -23,31 +23,36 @@ The project began as a single FastAPI endpoint that accepted a question and
 returned a placeholder answer. I reorganized that into a more conventional
 application structure so each part of the pipeline can evolve independently:
 
-- `app/api/main.py` is the HTTP entry point. It wires the question workflow
-  through FastAPI dependency injection and maps errors to clean HTTP responses.
-- `app/api/schemas.py` currently holds the public polling response schema.
-  Other request and response models still live in the API and service modules;
-  moving all public schemas here is a future refinement.
-- `app/core/config.py` centralizes settings loaded from environment variables
+- `app/main.py` sets up the application, lifespan, middleware, and error handlers.
+  `app/routers/` defines HTTP endpoints. `app/dependencies/` provides the
+  question workflow to question routes and the question-job store to readiness.
+- `app/schemas/` holds public question, health, and error schemas. API handlers map
+  service DTOs to these independently defined response models.
+- `app/config/settings.py` centralizes settings loaded from environment variables
   and an optional `.env` file. It keeps environment-specific values out of the
-  source code.
-- `app/services/question_workflow.py` coordinates job creation, answer
-  processing, and persistence. The processor interface and placeholder live in
-  `app/services/question_processor.py`; the `QuestionJobStore` interface and
-  SQLite implementation live under `app/stores/`. Completed and failed jobs
-  survive restarts and can be retrieved through the status endpoint.
+  source code; `app/config/logging.py` configures application logging.
+- `app/services/question_workflow.py` assigns job IDs and coordinates idempotency,
+  answer processing, and persistence. The processor interface and placeholder
+  live in `app/services/question_processor.py`; the `QuestionJobStore` protocol
+  lives in `app/stores/question_job_store.py` and the SQLite implementation lives
+  in `app/stores/sqlite.py`. Completed and failed jobs survive restarts and can
+  be retrieved through the status endpoint.
+- `app/domain/questions.py` defines internal question result and job DTOs.
+  `app/domain/errors.py` defines domain errors such as idempotency-key reuse.
 - `app/retrieval/` will own chunking, indexing, search, ranking, and context
   assembly once the retrieval adapters are added.
-- `app/models/` holds question-domain DTOs and provider-neutral generation
-  interfaces, including the OpenAI Responses adapter and a deterministic fake.
+- `app/llm/` holds provider-neutral generation interfaces, including the
+  OpenAI Responses adapter and a deterministic fake.
 - `app/tools/` is reserved for optional callable tools the generator can use.
-- `tests/unit/`, `tests/integration/`, and `tests/evals/` mirror these
-  responsibilities and hold the corresponding automated tests.
+- `tests/unit/` and `tests/integration/` cover configuration, logging, job
+  storage, question processing, generation, and the HTTP API. `tests/evals/`
+  is reserved for retrieval and answer-quality evaluations.
 
 This structure keeps API handlers thin and separates workflow, answer
-processing, and job persistence. Retrieval, model, and tool packages remain
-future adapters. Processing failures are stored as failed jobs with the safe
-`processing_error` category; submission still returns a generic HTTP 500.
+processing, and job persistence. Retrieval and tool packages remain placeholders;
+generation supports local and OpenAI adapters. Processing failures are stored
+as failed jobs with the safe `processing_error` category; submission still
+returns a generic HTTP 500.
 
 ## What I'm learning here
 
@@ -124,11 +129,13 @@ OPENAI_API_KEY=your-key-here
 Do not commit real credentials to the repository.
 
 Local runs load all of these settings from environment variables or `.env`.
-Docker Compose currently forwards the Postgres settings, sets
-`QUESTIONS_DB_PATH` to `/app/data/questions.db`, and otherwise uses application
-defaults. Settings such as `LOG_LEVEL` and model configuration will need to be
-added to the Compose environment before `.env` overrides affect them inside the
-container.
+Docker Compose sets `QUESTIONS_DB_PATH` to `/app/data/questions.db` and forwards
+the archive directory, backup directory, live and archive retention, and
+Postgres settings from the environment, using the same defaults as the
+application. `LOG_LEVEL`, `GENERATION_PROVIDER`, `GENERATION_MODEL`,
+`EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, and `OPENAI_API_KEY` stay at
+application defaults inside the container until they are added to the Compose
+service environment.
 
 ### Run with Docker
 
@@ -173,13 +180,13 @@ CI workflow has not yet been added.
 With uv:
 
 ```bash
-uv run uvicorn app.api.main:app --reload
+uv run uvicorn app.main:app --reload
 ```
 
 With a pip-managed virtual environment:
 
 ```bash
-uvicorn app.api.main:app --reload
+uvicorn app.main:app --reload
 ```
 
 ### API
@@ -189,7 +196,7 @@ uvicorn app.api.main:app --reload
 | `GET` | `/health` | Report that the process is running. |
 | `GET` | `/ready` | Report that the API is ready to accept requests. |
 | `POST` | `/v1/questions` | Submit a question and get a completed result. |
-| `GET` | `/v1/questions/{request_id}` | Retrieve the status and result of a submitted question. |
+| `GET` | `/v1/questions/{question_id}` | Retrieve the status and result of a submitted question. |
 
 Submit a question:
 
@@ -203,7 +210,7 @@ Response:
 
 ```json
 {
-  "request_id": "<uuid>",
+  "question_id": "<uuid>",
   "answer": "This is a placeholder answer for: What is RAG?",
   "citations": [],
   "retrieval": {"documents_considered": 0, "chunks_returned": 0},
@@ -219,7 +226,7 @@ Response:
 Retrieve the stored job:
 
 ```bash
-curl http://localhost:8000/v1/questions/<request_id>
+curl http://localhost:8000/v1/questions/<question_id>
 ```
 
 Clients can send an optional `Idempotency-Key` header to reuse a saved terminal
@@ -295,14 +302,14 @@ before reopening traffic so expired idempotency keys are removed.
 
 ### Request logging
 
-Every request is logged with a correlation ID, HTTP method, route, response
+Every request is logged with its request ID, HTTP method, route, response
 status, and elapsed time:
 
 ```
 INFO:     Request completed request_id=<uuid> method=POST route=/v1/questions status=200 elapsed_ms=12.345
 ```
 
-You can provide your own correlation ID in the `x-request-id` header; otherwise
+You can provide your own request ID in the `x-request-id` header; otherwise
 the API generates one and returns it in the response:
 
 ```bash
@@ -312,8 +319,10 @@ curl -X POST http://localhost:8000/v1/questions \
   -d '{"question": "What is RAG?"}'
 ```
 
-Failure request logs include an `error_category` field. This is log metadata;
-HTTP error responses return a concise `detail` field instead:
+Request logs for validation failures (`422`) and server errors (`500`) include
+an `error_category` field. Logs for other responses, including `404` and `409`,
+record the status without that field. `error_category` is log metadata; HTTP
+error responses return a concise `detail` field instead:
 
 ```
 INFO:     Request completed request_id=<uuid> method=POST route=/v1/questions status=422 elapsed_ms=2.1 error_category=validation
@@ -321,8 +330,9 @@ INFO:     Request completed request_id=<uuid> method=POST route=/v1/questions st
 ```
 
 If question processing fails after the job is saved, the generic `500` response
-also includes an `x-question-id` header. Use that ID to poll
-`GET /v1/questions/{request_id}`; the job response reports `status: "failed"`
+also includes an `x-question-id` header. That header is the `question_id`. Use
+it to poll `GET /v1/questions/{question_id}`; the job response reports
+`status: "failed"`
 and `error_category: "processing_error"` without exposing provider exception
 details.
 
@@ -402,9 +412,10 @@ Run the linter:
 ruff check app tests
 ```
 
-The integration tests exercise the HTTP API with an in-memory service override,
-and the unit/evals directories are ready for retrieval, generation, and quality
-tests as those layers are added.
+The integration tests exercise the HTTP API through a dependency override
+backed by an in-memory SQLite store. Unit tests cover configuration, logging,
+job storage, the placeholder and LLM processors, and the generation adapters.
+`tests/evals/` is still a placeholder for retrieval and answer-quality tests.
 
 ## Notes & findings
 
@@ -414,8 +425,8 @@ tests as those layers are added.
 - **2026-10-23:** Pydantic models work well as both request/response schemas
   and internal DTOs, but it is important to keep internal-only fields out of
   public response models as the job state grows. A dedicated `QuestionJobResponse`
-  schema in `app/api/schemas.py` now maps the internal `QuestionJob` DTO to the
-  public status contract.
+  schema (now in `app/schemas/questions.py`) maps the internal `QuestionJob` DTO
+  to the public status contract.
 - **2026-10-20:** SQLite with a thread lock is sufficient for a single-process
   FastAPI app using thread-pool workers, but it will not scale to multiple
   processes or workers.
@@ -459,7 +470,7 @@ that they support this project's learning goals. Some may be deferred to future
 projects.
 
 - [ ] Add real document ingestion (load, chunk, embed) under `app/retrieval/`.
-- [ ] Add a local or API-based embedding model adapter under `app/models/`.
+- [ ] Add a local or API-based embedding model adapter under `app/llm/`.
 - [ ] Add a generation adapter that builds prompts from retrieved context.
 - [ ] Replace the placeholder processor with retrieval-grounded generation.
 - [ ] Store chunks and embeddings in the Postgres/pgvector container.

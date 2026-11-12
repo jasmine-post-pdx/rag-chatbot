@@ -1,13 +1,14 @@
 """SQLite implementation of question job persistence."""
 
+import json
 import os
 import sqlite3
 import threading
 from datetime import UTC, datetime
 from typing import Literal
 
-from app.models.questions import QuestionJob, QuestionResult
-from app.stores.question_jobs import IdempotencyKeyReuseError
+from app.domain.errors import IdempotencyKeyReuseError
+from app.domain.questions import QuestionJob, QuestionResult
 
 
 class SQLiteQuestionJobStore:
@@ -18,7 +19,11 @@ class SQLiteQuestionJobStore:
             os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
         self._conn = sqlite3.connect(db_path, check_same_thread=False, timeout=timeout)
         self._lock = threading.Lock()
-        self._ensure_table()
+        try:
+            self._ensure_table()
+        except BaseException:
+            self._conn.close()
+            raise
 
     def _ensure_table(self) -> None:
         """Create the jobs table and enable WAL for file-backed databases."""
@@ -26,14 +31,15 @@ class SQLiteQuestionJobStore:
             self._conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS question_jobs (
-                    request_id TEXT PRIMARY KEY,
+                    question_id TEXT PRIMARY KEY,
                     job_json TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     idempotency_key_hash TEXT,
-                    request_fingerprint TEXT
+                    question_fingerprint TEXT
                 )
                 """
             )
+            migrate_question_job_names(self._conn, "question_jobs")
             columns = {
                 row[1]
                 for row in self._conn.execute("PRAGMA table_info(question_jobs)").fetchall()
@@ -46,9 +52,9 @@ class SQLiteQuestionJobStore:
                 self._conn.execute(
                     "ALTER TABLE question_jobs ADD COLUMN created_at TEXT"
                 )
-            if "request_fingerprint" not in columns:
+            if "question_fingerprint" not in columns:
                 self._conn.execute(
-                    "ALTER TABLE question_jobs ADD COLUMN request_fingerprint TEXT"
+                    "ALTER TABLE question_jobs ADD COLUMN question_fingerprint TEXT"
                 )
             migration_timestamp = _utc_timestamp()
             self._conn.execute(
@@ -69,49 +75,49 @@ class SQLiteQuestionJobStore:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.commit()
 
-    def create_job(self, request_id: str) -> QuestionJob:
+    def create_job(self, question_id: str) -> QuestionJob:
         """Create and store a pending job."""
-        job = QuestionJob(request_id=request_id, status="pending")
+        job = QuestionJob(question_id=question_id, status="pending")
         return self._insert_job(job)
 
     def create_completed_job(
         self,
-        request_id: str,
+        question_id: str,
         result: QuestionResult,
         *,
         idempotency_key_hash: str | None = None,
-        request_fingerprint: str | None = None,
+        question_fingerprint: str | None = None,
     ) -> QuestionJob:
         """Insert a completed job without persisting an intermediate state."""
-        if result.request_id != request_id:
+        if result.question_id != question_id:
             raise ValueError(
-                f"Result request ID does not match job: {result.request_id} != {request_id}"
+                f"Result question ID does not match job: {result.question_id} != {question_id}"
             )
-        job = QuestionJob(request_id=request_id, status="completed", result=result)
+        job = QuestionJob(question_id=question_id, status="completed", result=result)
         return self._insert_job(
             job,
             idempotency_key_hash=idempotency_key_hash,
-            request_fingerprint=request_fingerprint,
+            question_fingerprint=question_fingerprint,
         )
 
     def create_failed_job(
         self,
-        request_id: str,
+        question_id: str,
         error_category: Literal["processing_error"],
         *,
         idempotency_key_hash: str | None = None,
-        request_fingerprint: str | None = None,
+        question_fingerprint: str | None = None,
     ) -> QuestionJob:
         """Insert a failed job without persisting an intermediate state."""
         job = QuestionJob(
-            request_id=request_id,
+            question_id=question_id,
             status="failed",
             error_category=error_category,
         )
         return self._insert_job(
             job,
             idempotency_key_hash=idempotency_key_hash,
-            request_fingerprint=request_fingerprint,
+            question_fingerprint=question_fingerprint,
         )
 
     def _insert_job(
@@ -119,25 +125,25 @@ class SQLiteQuestionJobStore:
         job: QuestionJob,
         *,
         idempotency_key_hash: str | None = None,
-        request_fingerprint: str | None = None,
+        question_fingerprint: str | None = None,
     ) -> QuestionJob:
         """Insert a new job record and preserve duplicate-ID errors."""
-        if (idempotency_key_hash is None) != (request_fingerprint is None):
-            raise ValueError("Idempotency key and request fingerprint must be provided together")
+        if (idempotency_key_hash is None) != (question_fingerprint is None):
+            raise ValueError("Idempotency key and question fingerprint must be provided together")
 
         with self._lock:
             try:
                 values = (
-                    job.request_id,
+                    job.question_id,
                     job.model_dump_json(),
                     _utc_timestamp(),
                     idempotency_key_hash,
-                    request_fingerprint,
+                    question_fingerprint,
                 )
                 insert = (
                     "INSERT INTO question_jobs "
-                    "(request_id, job_json, created_at, idempotency_key_hash, "
-                    "request_fingerprint) VALUES (?, ?, ?, ?, ?)"
+                    "(question_id, job_json, created_at, idempotency_key_hash, "
+                    "question_fingerprint) VALUES (?, ?, ?, ?, ?)"
                 )
                 if idempotency_key_hash is None:
                     self._conn.execute(insert, values)
@@ -148,7 +154,7 @@ class SQLiteQuestionJobStore:
                     )
                     if cursor.rowcount == 0:
                         row = self._conn.execute(
-                            "SELECT job_json, request_fingerprint FROM question_jobs "
+                            "SELECT job_json, question_fingerprint FROM question_jobs "
                             "WHERE idempotency_key_hash = ?",
                             (idempotency_key_hash,),
                         ).fetchone()
@@ -157,31 +163,31 @@ class SQLiteQuestionJobStore:
                             raise sqlite3.DatabaseError(
                                 "Unable to load the existing idempotency record"
                             )
-                        if row[1] != request_fingerprint:
+                        if row[1] != question_fingerprint:
                             raise IdempotencyKeyReuseError() from None
-                        return QuestionJob.model_validate_json(row[0])
+                        return QuestionJob.model_validate_json(rename_stored_question_id(row[0]))
                 self._conn.commit()
             except sqlite3.IntegrityError as exc:
-                raise ValueError(f"Job already exists: {job.request_id}") from exc
+                raise ValueError(f"Job already exists: {job.question_id}") from exc
         return job
 
-    def get_job(self, request_id: str) -> QuestionJob | None:
+    def get_job(self, question_id: str) -> QuestionJob | None:
         """Load a job, returning None when it does not exist."""
         with self._lock:
             row = self._conn.execute(
-                "SELECT job_json FROM question_jobs WHERE request_id = ?", (request_id,)
+                "SELECT job_json FROM question_jobs WHERE question_id = ?", (question_id,)
             ).fetchone()
         if row is None:
             return None
-        return QuestionJob.model_validate_json(row[0])
+        return QuestionJob.model_validate_json(rename_stored_question_id(row[0]))
 
     def get_by_idempotency_key(
         self, idempotency_key_hash: str
     ) -> tuple[QuestionJob, str] | None:
-        """Load a terminal job and its request fingerprint by hashed key."""
+        """Load a terminal job and its question fingerprint by hashed key."""
         with self._lock:
             row = self._conn.execute(
-                "SELECT job_json, request_fingerprint FROM question_jobs "
+                "SELECT job_json, question_fingerprint FROM question_jobs "
                 "WHERE idempotency_key_hash = ?",
                 (idempotency_key_hash,),
             ).fetchone()
@@ -189,24 +195,24 @@ class SQLiteQuestionJobStore:
             return None
         if row[1] is None:
             raise sqlite3.DatabaseError("Stored idempotency record is incomplete")
-        return QuestionJob.model_validate_json(row[0]), row[1]
+        return QuestionJob.model_validate_json(rename_stored_question_id(row[0])), row[1]
 
-    def complete_job(self, request_id: str, result: QuestionResult) -> QuestionJob:
+    def complete_job(self, question_id: str, result: QuestionResult) -> QuestionJob:
         """Persist a completed result for an existing job."""
-        if result.request_id != request_id:
+        if result.question_id != question_id:
             raise ValueError(
-                f"Result request ID does not match job: {result.request_id} != {request_id}"
+                f"Result question ID does not match job: {result.question_id} != {question_id}"
             )
-        job = QuestionJob(request_id=request_id, status="completed", result=result)
+        job = QuestionJob(question_id=question_id, status="completed", result=result)
         self._save_job(job)
         return job
 
     def fail_job(
-        self, request_id: str, error_category: Literal["processing_error"]
+        self, question_id: str, error_category: Literal["processing_error"]
     ) -> QuestionJob:
         """Persist a safe failure category for an existing job."""
         job = QuestionJob(
-            request_id=request_id,
+            question_id=question_id,
             status="failed",
             error_category=error_category,
         )
@@ -217,11 +223,11 @@ class SQLiteQuestionJobStore:
         """Replace an existing job record."""
         with self._lock:
             cursor = self._conn.execute(
-                "UPDATE question_jobs SET job_json = ? WHERE request_id = ?",
-                (job.model_dump_json(), job.request_id),
+                "UPDATE question_jobs SET job_json = ? WHERE question_id = ?",
+                (job.model_dump_json(), job.question_id),
             )
             if cursor.rowcount == 0:
-                raise ValueError(f"Job not found: {job.request_id}")
+                raise ValueError(f"Job not found: {job.question_id}")
             self._conn.commit()
 
     def is_ready(self) -> bool:
@@ -229,7 +235,7 @@ class SQLiteQuestionJobStore:
         try:
             with self._lock:
                 self._conn.execute(
-                    "SELECT request_id FROM question_jobs LIMIT 1"
+                    "SELECT question_id FROM question_jobs LIMIT 1"
                 ).fetchone()
             return True
         except sqlite3.Error:
@@ -246,6 +252,65 @@ class SQLiteQuestionJobStore:
         """Close the SQLite connection."""
         with self._lock:
             self._conn.close()
+
+
+def migrate_question_job_names(conn: sqlite3.Connection, table: str) -> None:
+    """Rename stored job IDs from ``request_id`` to ``question_id``.
+
+    Older databases used ``request_id`` for the question job and
+    ``request_fingerprint`` for the question-text hash. Those names now belong
+    only to the HTTP correlation ID, so existing rows are rewritten in place.
+    """
+    if table not in {"question_jobs", "archived_question_jobs"}:
+        raise ValueError(f"Unknown job table: {table}")
+    columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if not columns:
+        return
+    if "request_id" in columns and "question_id" not in columns:
+        conn.execute(f"ALTER TABLE {table} RENAME COLUMN request_id TO question_id")
+    if "request_fingerprint" in columns and "question_fingerprint" not in columns:
+        conn.execute(
+            f"ALTER TABLE {table} RENAME COLUMN request_fingerprint TO question_fingerprint"
+        )
+    columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if "question_id" not in columns or "job_json" not in columns:
+        return
+    rows = conn.execute(f"SELECT question_id, job_json FROM {table}").fetchall()
+    for question_id, job_json in rows:
+        updated = rename_stored_question_id(job_json)
+        if updated != job_json:
+            conn.execute(
+                f"UPDATE {table} SET job_json = ? WHERE question_id = ?",
+                (updated, question_id),
+            )
+
+
+def rename_stored_question_id(job_json: str) -> str:
+    """Return job JSON whose job and result IDs use ``question_id``."""
+    try:
+        payload = json.loads(job_json)
+    except json.JSONDecodeError:
+        return job_json
+    if not isinstance(payload, dict):
+        return job_json
+    changed = _rename_request_id_key(payload)
+    result = payload.get("result")
+    if isinstance(result, dict):
+        changed = _rename_request_id_key(result) or changed
+    if not changed:
+        return job_json
+    return json.dumps(payload, separators=(",", ":"))
+
+
+def _rename_request_id_key(payload: dict) -> bool:
+    if "request_id" not in payload or "question_id" in payload:
+        return False
+    renamed = {
+        ("question_id" if key == "request_id" else key): value for key, value in payload.items()
+    }
+    payload.clear()
+    payload.update(renamed)
+    return True
 
 
 def _utc_timestamp() -> str:

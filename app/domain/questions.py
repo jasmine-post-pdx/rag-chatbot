@@ -1,4 +1,8 @@
-"""Domain models for question processing and job state."""
+"""Internal models for question processing and job state.
+
+These DTOs are stored and passed through the workflow. Public HTTP models live
+in ``app.schemas`` and do not inherit from these classes.
+"""
 
 from typing import Literal
 
@@ -32,7 +36,7 @@ class ModelMetrics(BaseModel):
 class QuestionResult(BaseModel):
     """Completed answer and supporting metadata."""
 
-    request_id: str
+    question_id: str
     answer: str
     citations: list[Citation]
     retrieval: RetrievalMetrics
@@ -42,7 +46,7 @@ class QuestionResult(BaseModel):
 class QuestionJob(BaseModel):
     """Current state of a submitted question."""
 
-    request_id: str
+    question_id: str
     status: Literal["pending", "completed", "failed"]
     result: QuestionResult | None = None
     error_category: Literal["processing_error"] | None = None

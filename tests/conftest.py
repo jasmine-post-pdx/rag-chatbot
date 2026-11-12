@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.stores.sqlite_question_jobs import SQLiteQuestionJobStore
+from app.stores.sqlite import SQLiteQuestionJobStore
 
 
 @pytest.fixture

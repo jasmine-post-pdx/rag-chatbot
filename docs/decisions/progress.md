@@ -4,7 +4,36 @@ This file is a running log of what I figure out while learning AI tech — espec
 
 The point is not a polished essay. Each entry should capture what clicked, why it matters, and what is still fuzzy so I can see the trail later.
 
-Newest entries go at the top.
+Newest entries go at the top. Older entries describe the implementation and
+next steps as they stood at the time, not necessarily the current state.
+
+---
+
+## 2026-11-10 — Organized the API by responsibility
+
+**What I figured out**
+The FastAPI entry point is `app/main.py`; routers handle HTTP endpoints,
+dependencies provide the shared workflow, and public schemas are separate
+from service models. The lifespan creates and closes the SQLite store, which
+is injected into the workflow. Submission runs synchronously and saves a
+completed or failed job; an idempotency key can reuse a saved terminal result.
+
+The local processor returns a placeholder, while the OpenAI adapter in
+`app/llm/` can generate an answer when configured. Neither path performs
+retrieval yet, and the optional pgvector service is not connected to the app.
+
+**Why it matters**
+Separating HTTP handling, orchestration, persistence, and generation makes each
+boundary easier to test and evolve without changing the public API or existing
+SQLite jobs.
+
+**Still fuzzy**
+- Which chunking and retrieval strategy works best for the intended documents
+- Whether processing latency will eventually require a background worker
+
+**Next**
+Build an ingestion-to-retrieval vertical slice and evaluate retrieval and
+answer quality before connecting retrieval to generation.
 
 ---
 

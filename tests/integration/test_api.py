@@ -1,12 +1,16 @@
 """In-process tests for the public HTTP API."""
 
+import hashlib
 import logging
 
 import pytest
 
-from app.api import main
+from app import main
+from app.dependencies.question_jobs import get_question_job_store
+from app.dependencies.questions import get_question_workflow
+from app.domain.questions import QuestionJob
 from app.services.question_workflow import QuestionWorkflow
-from app.stores.sqlite_question_jobs import SQLiteQuestionJobStore
+from app.stores.sqlite import SQLiteQuestionJobStore
 
 # /health
 
@@ -28,18 +32,17 @@ def test_readiness_returns_ready(client):
     assert ready.json() == {"status": "ready"}
 
 
-def test_ready_returns_503_when_database_unavailable(client, store_factory):
+def test_ready_returns_503_when_database_unavailable(client):
     """Verify /ready returns 503 when the SQLite backing store is unusable."""
 
-    class UnreadyQuestionWorkflow(QuestionWorkflow):
-        """Stub service that reports itself as not ready."""
+    class UnreadyQuestionJobStore:
+        """Stub store that reports itself as not ready."""
 
         def is_ready(self) -> bool:
             """Return False to simulate a failed dependency."""
             return False
 
-    unready_workflow = UnreadyQuestionWorkflow(store_factory())
-    main.app.dependency_overrides[main.get_question_workflow] = lambda: unready_workflow
+    main.app.dependency_overrides[get_question_job_store] = lambda: UnreadyQuestionJobStore()
     response = client.get("/ready")
 
     assert response.status_code == 503
@@ -55,11 +58,11 @@ def test_submit_and_poll_question_returns_answer_and_metadata(client):
 
     assert response.status_code == 200
     submitted = response.json()
-    request_id = submitted["request_id"]
-    assert isinstance(request_id, str)
-    assert request_id
+    question_id = submitted["question_id"]
+    assert isinstance(question_id, str)
+    assert question_id
     assert submitted == {
-        "request_id": request_id,
+        "question_id": question_id,
         "answer": "This is a placeholder answer for: What is RAG?",
         "citations": [],
         "retrieval": {"documents_considered": 0, "chunks_returned": 0},
@@ -71,13 +74,13 @@ def test_submit_and_poll_question_returns_answer_and_metadata(client):
         },
     }
 
-    polled = client.get(f"/v1/questions/{request_id}")
+    polled = client.get(f"/v1/questions/{question_id}")
     assert polled.status_code == 200
     assert polled.json() == {
-        "request_id": request_id,
+        "question_id": question_id,
         "status": "completed",
         "result": {
-            "request_id": request_id,
+            "question_id": question_id,
             "answer": "This is a placeholder answer for: What is RAG?",
             "citations": [],
             "retrieval": {"documents_considered": 0, "chunks_returned": 0},
@@ -90,6 +93,81 @@ def test_submit_and_poll_question_returns_answer_and_metadata(client):
         },
         "error_category": None,
     }
+
+
+def test_idempotent_submission_reuses_result_and_rejects_different_question(client):
+    """The same key reuses its stored result but cannot identify another question."""
+    headers = {"Idempotency-Key": "question-key"}
+    first = client.post("/v1/questions", json={"question": "First?"}, headers=headers)
+    retry = client.post("/v1/questions", json={"question": "First?"}, headers=headers)
+    conflict = client.post("/v1/questions", json={"question": "Second?"}, headers=headers)
+
+    assert first.status_code == 200
+    assert retry.status_code == 200
+    assert retry.json() == first.json()
+    assert conflict.status_code == 409
+    assert conflict.json() == {"detail": "Idempotency-Key was already used for a different question"}
+
+
+def test_idempotent_failed_submission_reuses_failed_job(client, store_factory):
+    """A retry of a failed job retains its original ID without reprocessing."""
+    class FailingProcessor:
+        def __init__(self):
+            self.calls = 0
+
+        def process(self, question_id, question, *, request_id=None):
+            self.calls += 1
+            raise TimeoutError("private provider detail")
+
+    store = store_factory()
+    processor = FailingProcessor()
+    workflow = QuestionWorkflow(store, processor)
+    main.app.dependency_overrides[get_question_workflow] = lambda: workflow
+    headers = {"Idempotency-Key": "failed-key"}
+    first = client.post("/v1/questions", json={"question": "Help"}, headers=headers)
+    retry = client.post("/v1/questions", json={"question": "Help"}, headers=headers)
+
+    assert first.status_code == retry.status_code == 500
+    assert first.json() == retry.json() == {"detail": "Internal server error"}
+    assert first.headers["x-question-id"] == retry.headers["x-question-id"]
+    assert processor.calls == 1
+    job = store.get_job(first.headers["x-question-id"])
+    assert job is not None
+    assert job.status == "failed"
+    assert job.error_category == "processing_error"
+
+
+@pytest.mark.parametrize("job_status", ["pending", "completed"])
+def test_idempotent_incomplete_submission_returns_original_question_id(
+    client, question_store, job_status
+):
+    """An incomplete persisted job remains pollable and yields a safe error on retry."""
+    question_store._insert_job(
+        QuestionJob(question_id="incomplete-job", status=job_status),
+        idempotency_key_hash=hashlib.sha256(b"key").hexdigest(),
+        question_fingerprint=hashlib.sha256(b"Help").hexdigest(),
+    )
+    response = client.post(
+        "/v1/questions", json={"question": "Help"}, headers={"Idempotency-Key": "key"}
+    )
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Internal server error"}
+    assert response.headers["x-question-id"] == "incomplete-job"
+    poll = client.get("/v1/questions/incomplete-job")
+    assert poll.status_code == 200
+    assert poll.json()["status"] == job_status
+    assert poll.json()["result"] is None
+
+
+@pytest.mark.parametrize("key", ["", " ", "x" * 256])
+def test_submit_rejects_invalid_idempotency_key(client, key):
+    """The HTTP layer retains validation for empty, blank, and oversized keys."""
+    response = client.post(
+        "/v1/questions", json={"question": "Help"}, headers={"Idempotency-Key": key}
+    )
+
+    assert response.status_code == 422
 
 
 def test_submit_trims_whitespace_from_question(client):
@@ -206,22 +284,40 @@ def test_poll_unknown_question_is_404(client):
     assert response.json() == {"detail": "Question not found"}
 
 
+@pytest.mark.parametrize("result", [None, {"answer": 123}])
+def test_submit_missing_or_malformed_result_returns_generic_500(client, store_factory, result):
+    """A broken workflow result is treated as a server error, not a client error."""
+    class BadResponseQuestionWorkflow(QuestionWorkflow):
+        def submit_question(self, question, *, request_id=None, idempotency_key=None):
+            return result
+
+    workflow = BadResponseQuestionWorkflow(store_factory())
+    main.app.dependency_overrides[get_question_workflow] = lambda: workflow
+    response = client.post(
+        "/v1/questions", json={"question": "Help"}, headers={"x-request-id": "test-request"}
+    )
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Internal server error"}
+    assert response.headers["x-request-id"] == "test-request"
+
+
 def test_invalid_server_response_data_returns_500(client, store_factory):
     """Verify response-validation failures for server-generated data return 500, not 4xx."""
 
     class BadResponseQuestionWorkflow(QuestionWorkflow):
         """Stub service that returns malformed response data."""
 
-        def get_job(self, request_id):
+        def get_job(self, question_id):
             """Return a fake job whose result violates the response model."""
 
             class FakeJob:
                 def __init__(self, job_id):
-                    self.request_id = job_id
+                    self.question_id = job_id
                     self.status = "completed"
                     self.error_category = None
                     self.result = {
-                        "request_id": job_id,
+                        "question_id": job_id,
                         "answer": 123,
                         "citations": "not a list",
                         "retrieval": {
@@ -236,10 +332,10 @@ def test_invalid_server_response_data_returns_500(client, store_factory):
                         },
                     }
 
-            return FakeJob(request_id)
+            return FakeJob(question_id)
 
     bad_service = BadResponseQuestionWorkflow(store_factory())
-    main.app.dependency_overrides[main.get_question_workflow] = lambda: bad_service
+    main.app.dependency_overrides[get_question_workflow] = lambda: bad_service
     response = client.get("/v1/questions/bad-result")
 
     assert response.status_code == 500
@@ -272,12 +368,12 @@ def test_submit_pipeline_failure_returns_generic_500(
     class FailingProcessor:
         """Processor that fails at the simulated pipeline stage."""
 
-        def process(self, request_id, question, *, correlation_id=None):
+        def process(self, question_id, question, *, request_id=None):
             raise failure_type(f"{failure_stage} failed: {error_message}")
 
     store = store_factory()
     failing_workflow = QuestionWorkflow(store, FailingProcessor())
-    main.app.dependency_overrides[main.get_question_workflow] = lambda: failing_workflow
+    main.app.dependency_overrides[get_question_workflow] = lambda: failing_workflow
     response = client.post("/v1/questions", json={"question": "Help"})
 
     assert response.status_code == 500
@@ -288,21 +384,21 @@ def test_submit_pipeline_failure_returns_generic_500(
     error_records = [
         record
         for record in caplog.records
-        if record.name == "app.api.main" and record.levelno == logging.ERROR
+        if record.name == "app.main" and record.levelno == logging.ERROR
     ]
     assert len(error_records) == 1
     assert error_records[0].exception_type == failure_type.__name__
-    request_id = response.headers["x-question-id"]
-    assert error_records[0].question_id == request_id
+    question_id = response.headers["x-question-id"]
+    assert error_records[0].question_id == question_id
     request_records = [
-        record for record in caplog.records if record.name == "app.api.middleware"
+        record for record in caplog.records if record.name == "app.middleware"
     ]
     assert len(request_records) == 1
     assert request_records[0].status == 500
-    poll = client.get(f"/v1/questions/{request_id}")
+    poll = client.get(f"/v1/questions/{question_id}")
     assert poll.status_code == 200
     assert poll.json() == {
-        "request_id": request_id,
+        "question_id": question_id,
         "status": "failed",
         "result": None,
         "error_category": "processing_error",
@@ -312,21 +408,21 @@ def test_submit_pipeline_failure_returns_generic_500(
 def test_submit_failure_state_persistence_error_returns_generic_500(client, store_factory):
     """Verify failure-state persistence errors produce a generic server response."""
     class FailingProcessor:
-        def process(self, request_id, question, *, correlation_id=None):
+        def process(self, question_id, question, *, request_id=None):
             raise TimeoutError("provider token must not reach the client")
 
     class FailingFailureStore(SQLiteQuestionJobStore):
         def __init__(self):
             super().__init__()
-            self.failed_request_id = None
+            self.failed_question_id = None
 
-        def create_failed_job(self, request_id, error_category, **kwargs):
-            self.failed_request_id = request_id
+        def create_failed_job(self, question_id, error_category, **kwargs):
+            self.failed_question_id = question_id
             raise RuntimeError("database connection detail must not reach the client")
 
     store = store_factory(store_type=FailingFailureStore)
     workflow = QuestionWorkflow(store, FailingProcessor())
-    main.app.dependency_overrides[main.get_question_workflow] = lambda: workflow
+    main.app.dependency_overrides[get_question_workflow] = lambda: workflow
 
     response = client.post("/v1/questions", json={"question": "Help"})
 
@@ -335,7 +431,7 @@ def test_submit_failure_state_persistence_error_returns_generic_500(client, stor
     assert "provider token" not in response.text
     assert "database connection detail" not in response.text
     assert "x-question-id" not in response.headers
-    assert store.get_job(store.failed_request_id) is None
+    assert store.get_job(store.failed_question_id) is None
 
 
 def test_submit_sqlite_failure_returns_generic_500(client, question_store):

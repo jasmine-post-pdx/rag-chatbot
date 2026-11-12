@@ -1,13 +1,12 @@
-"""Unit tests for the LLM-backed question answerer."""
+"""Unit tests for the LLM-backed question processor."""
 
 import logging
 
 import pytest
 
-from app.models import FakeLLMClient, GenerationResult
-from app.models.questions import ModelMetrics, RetrievalMetrics
-from app.services.question_answerer import QuestionAnswerer
-from app.services.question_processor import QuestionProcessor
+from app.domain.questions import ModelMetrics, RetrievalMetrics
+from app.llm import FakeLLMClient, GenerationResult
+from app.services.question_processor import LLMQuestionProcessor, QuestionProcessor
 from app.services.question_workflow import QuestionProcessingError, QuestionWorkflow
 
 
@@ -56,15 +55,15 @@ class FailingClient:
         raise RuntimeError("provider unavailable")
 
 
-def test_answerer_maps_generation_result_to_question_result():
+def test_processor_maps_generation_result_to_question_result():
     """Verify answer, provider, model, and token usage are mapped onto the result."""
     client = RecordingClient()
-    answerer = QuestionAnswerer(client)
+    processor = LLMQuestionProcessor(client)
 
-    result = answerer.process("req-1", "What is RAG?")
+    result = processor.process("req-1", "What is RAG?")
 
     assert client.questions == ["What is RAG?"]
-    assert result.request_id == "req-1"
+    assert result.question_id == "req-1"
     assert result.answer == "A generated answer"
     assert result.model == ModelMetrics(
         provider="test-provider",
@@ -74,25 +73,25 @@ def test_answerer_maps_generation_result_to_question_result():
     )
 
 
-def test_answerer_logs_generation_metadata_with_correlation_and_question_ids(caplog):
+def test_processor_logs_generation_metadata_with_correlation_and_question_ids(caplog):
     """Log provider metadata, usage, and both IDs after successful generation.
 
     Args:
         caplog: Pytest fixture used to capture structured log records.
     """
-    caplog.set_level(logging.INFO, logger="app.services.question_answerer")
-    answerer = QuestionAnswerer(RecordingClient())
+    caplog.set_level(logging.INFO, logger="app.services.question_processor")
+    processor = LLMQuestionProcessor(RecordingClient())
 
-    answerer.process(
+    processor.process(
         "question-job-1",
         "What is RAG?",
-        correlation_id="http-request-1",
+        request_id="http-request-1",
     )
 
     record = next(
         record
         for record in caplog.records
-        if record.name == "app.services.question_answerer"
+        if record.name == "app.services.question_processor"
         and record.message == "Generation completed"
     )
     assert record.request_id == "http-request-1"
@@ -104,7 +103,7 @@ def test_answerer_logs_generation_metadata_with_correlation_and_question_ids(cap
     assert record.output_tokens == 34
 
 
-def test_answerer_logs_sanitized_failure_category_without_question(caplog):
+def test_processor_logs_sanitized_failure_category_without_question(caplog):
     """Log a safe categorized provider failure without exposing prompt text.
 
     Args:
@@ -120,20 +119,20 @@ def test_answerer_logs_sanitized_failure_category_without_question(caplog):
             """Raise an error that echoes the prompt and a credential pattern."""
             raise RuntimeError(f"Rejected question: {question}; password=secret")
 
-    caplog.set_level(logging.ERROR, logger="app.services.question_answerer")
-    answerer = QuestionAnswerer(FailingClient())
+    caplog.set_level(logging.ERROR, logger="app.services.question_processor")
+    processor = LLMQuestionProcessor(FailingClient())
 
     with pytest.raises(RuntimeError):
-        answerer.process(
+        processor.process(
             "question-job-2",
             "private prompt text",
-            correlation_id="http-request-2",
+            request_id="http-request-2",
         )
 
     record = next(
         record
         for record in caplog.records
-        if record.name == "app.services.question_answerer"
+        if record.name == "app.services.question_processor"
         and record.message.startswith("Generation failed:")
     )
     assert record.request_id == "http-request-2"
@@ -147,9 +146,9 @@ def test_answerer_logs_sanitized_failure_category_without_question(caplog):
     assert "secret" not in record.message
 
 
-def test_answerer_returns_empty_citations_and_zero_retrieval():
+def test_processor_returns_empty_citations_and_zero_retrieval():
     """Verify non-RAG answers report no citations and no retrieval work."""
-    result = QuestionAnswerer(FakeLLMClient()).process("req-1", "What is RAG?")
+    result = LLMQuestionProcessor(FakeLLMClient()).process("req-1", "What is RAG?")
 
     assert result.citations == []
     assert result.retrieval == RetrievalMetrics(
@@ -157,18 +156,20 @@ def test_answerer_returns_empty_citations_and_zero_retrieval():
     )
 
 
-def test_answerer_propagates_client_errors():
+def test_processor_propagates_client_errors():
     """Verify client failures are not swallowed so the workflow can record them."""
     with pytest.raises(RuntimeError, match="provider unavailable"):
-        QuestionAnswerer(FailingClient()).process("req-1", "What is RAG?")
+        LLMQuestionProcessor(FailingClient()).process("req-1", "What is RAG?")
 
 
-def test_answerer_satisfies_question_processor_interface(store_factory):
-    """Verify the answerer plugs into the workflow as a question processor."""
-    processor: QuestionProcessor = QuestionAnswerer(FakeLLMClient(model="fake-model"))
-    workflow = QuestionWorkflow(store_factory(":memory:"), processor)
+def test_processor_satisfies_question_processor_interface(store_factory):
+    """Verify the processor plugs into the workflow as a question processor."""
+    processor: QuestionProcessor = LLMQuestionProcessor(FakeLLMClient(model="fake-model"))
+    workflow = QuestionWorkflow(
+        store_factory(":memory:"), processor, question_id_factory=lambda: "req-1"
+    )
 
-    result = workflow.submit("req-1", "What is RAG?")
+    result = workflow.submit_question("What is RAG?")
 
     assert result.answer == "Fake answer to: What is RAG?"
     assert result.model.provider == "fake"
@@ -179,14 +180,16 @@ def test_answerer_satisfies_question_processor_interface(store_factory):
     assert job.result == result
 
 
-def test_workflow_marks_job_failed_when_answerer_client_fails(store_factory):
-    """Verify client failures through the answerer are persisted as failed jobs."""
+def test_workflow_marks_job_failed_when_processor_client_fails(store_factory):
+    """Verify client failures through the processor are persisted as failed jobs."""
     workflow = QuestionWorkflow(
-        store_factory(":memory:"), QuestionAnswerer(FailingClient())
+        store_factory(":memory:"),
+        LLMQuestionProcessor(FailingClient()),
+        question_id_factory=lambda: "req-1",
     )
 
     with pytest.raises(QuestionProcessingError):
-        workflow.submit("req-1", "What is RAG?")
+        workflow.submit_question("What is RAG?")
 
     job = workflow.get_job("req-1")
     assert job is not None

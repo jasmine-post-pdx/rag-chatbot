@@ -18,7 +18,9 @@ if os.getenv("RUN_OPENAI_SMOKE") != "1":
     test_environment["OPENAI_API_KEY"] = "test-only-placeholder"
 os.environ.update(test_environment)
 
-from app.api import main  # noqa: E402
+from app import main  # noqa: E402
+from app.dependencies.question_jobs import get_question_job_store
+from app.dependencies.questions import get_question_workflow
 from app.services.question_workflow import QuestionWorkflow  # noqa: E402
 
 
@@ -50,9 +52,10 @@ def question_workflow(question_store):
 @pytest.fixture
 def client(question_workflow):
     """Yield a test client with the workflow dependency overridden."""
-    main.app.dependency_overrides[main.get_question_workflow] = lambda: question_workflow
+    main.app.dependency_overrides[get_question_workflow] = lambda: question_workflow
     try:
         with TestClient(main.app, raise_server_exceptions=False) as test_client:
             yield test_client
     finally:
-        main.app.dependency_overrides.pop(main.get_question_workflow, None)
+        main.app.dependency_overrides.pop(get_question_workflow, None)
+        main.app.dependency_overrides.pop(get_question_job_store, None)

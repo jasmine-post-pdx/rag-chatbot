@@ -17,9 +17,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Sequence
 
-from app.core.config import settings
-from app.models.questions import QuestionJob
-from app.stores.sqlite_question_jobs import SQLiteQuestionJobStore
+from app.config.settings import settings
+from app.domain.questions import QuestionJob
+from app.stores.sqlite import SQLiteQuestionJobStore, migrate_question_job_names
 
 BATCH_SIZE = 500
 SNAPSHOT_FORMAT = "%Y%m%dT%H%M%S%fZ"
@@ -254,24 +254,25 @@ def _write_archive_rows(
         conn.execute("PRAGMA journal_mode=DELETE")
         conn.execute(
             "CREATE TABLE IF NOT EXISTS archived_question_jobs ("
-            "request_id TEXT PRIMARY KEY, job_json TEXT NOT NULL, "
+            "question_id TEXT PRIMARY KEY, job_json TEXT NOT NULL, "
             "created_at TEXT NOT NULL)"
         )
+        migrate_question_job_names(conn, "archived_question_jobs")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_archived_question_jobs_created_at "
             "ON archived_question_jobs (created_at)"
         )
         with conn:
-            for request_id, job_json, created_at in rows:
+            for question_id, job_json, created_at in rows:
                 conn.execute(
                     "INSERT OR IGNORE INTO archived_question_jobs "
-                    "(request_id, job_json, created_at) VALUES (?, ?, ?)",
-                    (request_id, job_json, created_at),
+                    "(question_id, job_json, created_at) VALUES (?, ?, ?)",
+                    (question_id, job_json, created_at),
                 )
                 archived = conn.execute(
                     "SELECT job_json, created_at FROM archived_question_jobs "
-                    "WHERE request_id = ?",
-                    (request_id,),
+                    "WHERE question_id = ?",
+                    (question_id,),
                 ).fetchone()
                 if archived != (job_json, created_at):
                     raise MaintenanceError("An archived job does not match its source")
@@ -305,7 +306,7 @@ def _archive_batch(
         with live_conn:
             live_conn.executemany(
                 "DELETE FROM question_jobs "
-                "WHERE request_id = ? AND job_json = ? AND created_at = ?",
+                "WHERE question_id = ? AND job_json = ? AND created_at = ?",
                 group,
             )
         deleted = live_conn.total_changes - before
@@ -411,7 +412,7 @@ def archive_old_jobs(
                     "PRAGMA table_info(question_jobs)"
                 ).fetchall()
             }
-            if not {"job_json", "created_at"} <= columns:
+            if not {"question_id", "job_json", "created_at"} <= columns:
                 raise MaintenanceError(
                     "Start the application once to migrate the database before dry-run"
                 )
@@ -439,24 +440,24 @@ def archive_old_jobs(
         archived = 0
         nonterminal = 0
         last_created_at = ""
-        last_request_id = ""
+        last_question_id = ""
         while True:
             rows = live_conn.execute(
-                "SELECT request_id, job_json, created_at FROM question_jobs "
+                "SELECT question_id, job_json, created_at FROM question_jobs "
                 "WHERE created_at < ? AND (created_at > ? OR "
-                "(created_at = ? AND request_id > ?)) "
-                "ORDER BY created_at, request_id LIMIT ?",
+                "(created_at = ? AND question_id > ?)) "
+                "ORDER BY created_at, question_id LIMIT ?",
                 (
                     live_cutoff,
                     last_created_at,
                     last_created_at,
-                    last_request_id,
+                    last_question_id,
                     BATCH_SIZE,
                 ),
             ).fetchall()
             if not rows:
                 break
-            last_request_id, last_created_at = rows[-1][0], rows[-1][2]
+            last_question_id, last_created_at = rows[-1][0], rows[-1][2]
             batch_archived, batch_nonterminal = _archive_batch(
                 live_conn, archive_dir, rows
             )

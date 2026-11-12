@@ -2,12 +2,12 @@
 
 import pytest
 
-from app.services.processor_factory import (
+from app.services.question_processor import (
+    LLMQuestionProcessor,
+    PlaceholderQuestionProcessor,
     UnknownGenerationProviderError,
     build_question_processor,
 )
-from app.services.question_answerer import QuestionAnswerer
-from app.services.question_processor import PlaceholderQuestionProcessor
 
 
 def test_local_provider_uses_placeholder_processor():
@@ -17,13 +17,13 @@ def test_local_provider_uses_placeholder_processor():
     assert isinstance(processor, PlaceholderQuestionProcessor)
 
 
-def test_openai_provider_uses_answerer_without_requiring_api_key(monkeypatch):
+def test_openai_provider_uses_llm_processor_without_requiring_api_key(monkeypatch):
     """Verify the OpenAI processor builds even when no API key is configured."""
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     processor = build_question_processor("openai", "gpt-test")
 
-    assert isinstance(processor, QuestionAnswerer)
+    assert isinstance(processor, LLMQuestionProcessor)
 
 
 @pytest.mark.parametrize("provider", ["anthropic", "", "OpenAI"])
