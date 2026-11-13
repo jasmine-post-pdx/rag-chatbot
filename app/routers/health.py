@@ -12,9 +12,7 @@ router = APIRouter(tags=["health"])
 def health() -> HealthResponse:
     """Report that the API process is running.
 
-    Returns:
-        A status message indicating the API is running.
-    """
+    :returns: A status message indicating the API is running."""
     return HealthResponse(status="ok")
 
 
@@ -22,15 +20,9 @@ def health() -> HealthResponse:
 def ready(question_job_store: QuestionJobStoreDep) -> ReadinessResponse:
     """Report whether the question-job store is ready.
 
-    Args:
-        question_job_store: The store created during application startup.
-
-    Returns:
-        A status message indicating the API is ready.
-
-    Raises:
-        HTTPException: If the backing store is not usable.
-    """
+    :param question_job_store: The store created during application startup.
+    :returns: A status message indicating the API is ready.
+    :raises HTTPException: If the backing store is not usable."""
     if not question_job_store.is_ready():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

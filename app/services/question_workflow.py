@@ -4,7 +4,11 @@ import hashlib
 from collections.abc import Callable
 from uuid import uuid4
 
-from app.domain.errors import IdempotencyKeyReuseError
+from app.domain.errors import (
+    IdempotencyKeyReuseError,
+    IncompleteIdempotencyRecordError,
+    InvalidIdempotencyKeyError,
+)
 from app.domain.questions import QuestionJob, QuestionResult
 from app.services.question_processor import (
     PlaceholderQuestionProcessor,
@@ -17,16 +21,24 @@ class QuestionProcessingError(Exception):
     """A processing failure whose persisted job can be retrieved by ID."""
 
     def __init__(self, question_id: str, exception_type: str) -> None:
+        """Record the failed job ID and underlying exception type name.
+
+        :param question_id: Identifier of the persisted failed job.
+        :param exception_type: Short name of the exception that caused failure."""
         super().__init__("Question processing failed")
         self.question_id = question_id
         self.exception_type = exception_type
 
 
 class QuestionStatePersistenceError(Exception):
-    """A processing failure whose failed state could not be persisted."""
+    """A terminal job state could not be persisted after processing."""
 
     def __init__(self, question_id: str, exception_type: str) -> None:
-        super().__init__("Question job failure state could not be persisted")
+        """Record the job ID and persistence exception type name.
+
+        :param question_id: Identifier of the job that could not be saved.
+        :param exception_type: Short name of the persistence exception."""
+        super().__init__("Question job state could not be persisted")
         self.question_id = question_id
         self.exception_type = exception_type
 
@@ -40,6 +52,11 @@ class QuestionWorkflow:
         processor: QuestionProcessor | None = None,
         question_id_factory: Callable[[], str] = lambda: str(uuid4()),
     ):
+        """Create a workflow that coordinates processing and persistence.
+
+        :param store: Persistence backend for terminal question jobs.
+        :param processor: Answer processor. Defaults to the placeholder processor.
+        :param question_id_factory: Callable that returns a new question ID."""
         self._store = store
         self._processor = processor or PlaceholderQuestionProcessor()
         self._question_id_factory = question_id_factory
@@ -55,7 +72,11 @@ class QuestionWorkflow:
 
         ``request_id`` is the HTTP correlation ID. It is independent of the
         question ID. An idempotency key can reuse a previously persisted job.
-        """
+
+        :param question: User question to process.
+        :param request_id: Optional HTTP correlation ID for log correlation.
+        :param idempotency_key: Optional client key used to reuse a terminal result.
+        :returns: The generated and persisted question result."""
         return self._process_and_persist(
             self._question_id_factory(),
             question,
@@ -73,21 +94,17 @@ class QuestionWorkflow:
     ) -> QuestionResult:
         """Process a question, then persist either success or failure.
 
-        Args:
-            question_id: Service-generated identifier assigned to the question job.
-            question: User question to process.
-            request_id: Optional HTTP correlation ID for log correlation.
-            idempotency_key: Optional client key used to reuse a terminal result.
-
-        Returns:
-            The generated and persisted question result.
-        """
+        :param question_id: Service-generated identifier assigned to the question job.
+        :param question: User question to process.
+        :param request_id: Optional HTTP correlation ID for log correlation.
+        :param idempotency_key: Optional client key used to reuse a terminal result.
+        :returns: The generated and persisted question result."""
         idempotency_key_hash: str | None = None
         question_fingerprint: str | None = None
         if idempotency_key is not None:
             idempotency_key = idempotency_key.strip()
             if not idempotency_key or len(idempotency_key) > 255:
-                raise ValueError("Idempotency-Key must contain 1 to 255 characters")
+                raise InvalidIdempotencyKeyError() from None
             idempotency_key_hash = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
             question_fingerprint = hashlib.sha256(question.encode("utf-8")).hexdigest()
             existing = self._store.get_by_idempotency_key(idempotency_key_hash)
@@ -100,6 +117,7 @@ class QuestionWorkflow:
         processing_exception_type: str | None = None
         persistence_exception_type: str | None = None
         idempotency_conflict = False
+        incomplete_idempotency_record = False
         terminal_job: QuestionJob | None = None
         result: QuestionResult | None = None
         try:
@@ -123,11 +141,29 @@ class QuestionWorkflow:
                 )
             except IdempotencyKeyReuseError:
                 idempotency_conflict = True
+            except IncompleteIdempotencyRecordError:
+                incomplete_idempotency_record = True
+            except Exception as persistence_exc:
+                persistence_exception_type = type(persistence_exc).__name__
+        else:
+            try:
+                terminal_job = self._store.create_completed_job(
+                    question_id,
+                    result,
+                    idempotency_key_hash=idempotency_key_hash,
+                    question_fingerprint=question_fingerprint,
+                )
+            except IdempotencyKeyReuseError:
+                idempotency_conflict = True
+            except IncompleteIdempotencyRecordError:
+                incomplete_idempotency_record = True
             except Exception as persistence_exc:
                 persistence_exception_type = type(persistence_exc).__name__
 
         # Raise after leaving the except blocks so the original exception objects
         # are not retained as __cause__ or __context__ on the public wrapper.
+        if incomplete_idempotency_record:
+            raise IncompleteIdempotencyRecordError() from None
         if idempotency_conflict:
             raise IdempotencyKeyReuseError() from None
         if persistence_exception_type is not None:
@@ -136,20 +172,17 @@ class QuestionWorkflow:
             if terminal_job is not None and terminal_job.question_id != question_id:
                 return _result_for_terminal_job(terminal_job)
             raise QuestionProcessingError(question_id, processing_exception_type) from None
-        if result is None:
+        if result is None or terminal_job is None:
             raise RuntimeError("Question processor returned no result")
-        terminal_job = self._store.create_completed_job(
-            question_id,
-            result,
-            idempotency_key_hash=idempotency_key_hash,
-            question_fingerprint=question_fingerprint,
-        )
         if terminal_job.question_id != question_id:
             return _result_for_terminal_job(terminal_job)
         return result
 
     def get_job(self, question_id: str) -> QuestionJob | None:
-        """Return the persisted job state."""
+        """Return the persisted job state.
+
+        :param question_id: Unique identifier of the job to load.
+        :returns: The stored job, or ``None`` when it does not exist."""
         return self._store.get_job(question_id)
 
     def close(self) -> None:
@@ -158,7 +191,11 @@ class QuestionWorkflow:
 
 
 def _result_for_terminal_job(job: QuestionJob) -> QuestionResult:
-    """Return a saved result or reproduce the generic response for a prior failure."""
+    """Return a saved result or reproduce the generic response for a prior failure.
+
+    :param job: Terminal job loaded from the store.
+    :returns: The completed result when the job finished successfully.
+    :raises QuestionProcessingError: If the prior attempt failed or is incomplete."""
     if job.status == "completed" and job.result is not None:
         return job.result
     if job.status == "failed":

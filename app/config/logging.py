@@ -35,12 +35,19 @@ class RequestFormatter(logging.Formatter):
         "model",
         "input_tokens",
         "output_tokens",
+        "finish_status",
+        "provider_request_id",
+        "attempt",
+        "provider_status",
         "error_category",
         "exception_type",
     ]
 
     def format(self, record: logging.LogRecord) -> str:
-        """Return a log line with optional request context fields."""
+        """Return a log line with optional request context fields.
+
+        :param record: Log record that may carry ordered extra attributes.
+        :returns: A single-line message with ``key=value`` extras when present."""
         base = f"{record.levelname}:     {record.getMessage()}"
         extras: list[str] = []
         for key in self._ordered_keys:
@@ -87,7 +94,11 @@ _URL_CREDENTIAL_PATTERN = re.compile(r"(?i)(https?://)[^/@\s]+@")
 
 
 def normalize_request_id(value: str | None) -> str:
-    """Return a safe bounded correlation ID, generating one for invalid input."""
+    """Return a safe bounded correlation ID, generating one for invalid input.
+
+    :param value: Client-supplied request ID, or ``None`` when absent.
+    :returns: The original value when it matches the allowed pattern; otherwise a
+        newly generated UUID string."""
     if value and _REQUEST_ID_PATTERN.fullmatch(value):
         return value
     return str(uuid4())
@@ -98,7 +109,12 @@ def sanitize_exception_summary(
     max_length: int = 300,
     sensitive_values: tuple[str, ...] = (),
 ) -> str:
-    """Redact common credentials and keep exception summaries to one short line."""
+    """Redact common credentials and keep exception summaries to one short line.
+
+    :param exc: Exception whose message will be summarized.
+    :param max_length: Maximum length of the returned summary, including ellipsis.
+    :param sensitive_values: Exact substrings to replace with ``<redacted>``.
+    :returns: A single-line summary safe enough for application logs."""
     summary = str(exc)
     for value in sensitive_values:
         if value:
@@ -122,7 +138,15 @@ def log_request_summary(
     elapsed_ms: float,
     error_category: str | None = None,
 ) -> None:
-    """Emit the standard one-line request summary."""
+    """Emit the standard one-line request summary.
+
+    :param logger: Logger that receives the summary.
+    :param request_id: Correlation ID for the HTTP request.
+    :param method: HTTP method.
+    :param route: Request path.
+    :param status: HTTP status code.
+    :param elapsed_ms: Request duration in milliseconds.
+    :param error_category: Optional stable category such as ``validation``."""
     fields: dict[str, object] = {
         "request_id": request_id,
         "method": method,
@@ -144,7 +168,14 @@ def log_exception_summary(
     error_category: str,
     question_id: str | None = None,
 ) -> None:
-    """Emit one safe error summary with stable context fields."""
+    """Emit one safe error summary with stable context fields.
+
+    :param logger: Logger that receives the error record.
+    :param exc: Exception to summarize after redaction.
+    :param message: Stable log message prefix.
+    :param request_id: Correlation ID for the HTTP request.
+    :param error_category: Stable category such as ``server``.
+    :param question_id: Optional question job identifier."""
     fields: dict[str, object] = {
         "request_id": request_id,
         "error_category": error_category,
@@ -157,7 +188,10 @@ def log_exception_summary(
 
 
 def log_validation_failure(logger: logging.Logger, request_id: str) -> None:
-    """Emit a validation warning without logging submitted field values."""
+    """Emit a validation warning without logging submitted field values.
+
+    :param logger: Logger that receives the warning.
+    :param request_id: Correlation ID for the failed request."""
     logger.warning(
         "Request validation failed",
         extra={"request_id": request_id, "error_category": "validation"},

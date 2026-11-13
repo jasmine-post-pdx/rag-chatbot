@@ -17,52 +17,45 @@ my experience with API design, service-layer testing, and architectural decision
 emphasizing modularity, maintainability, and systematic evaluation as steps toward 
 building more robust, production-ready AI applications.
 
-## From minimal scaffold to structured project
+## Project Structure
 
-The project began as a single FastAPI endpoint that accepted a question and
-returned a placeholder answer. I reorganized that into a more conventional
-application structure so each part of the pipeline can evolve independently:
+The application is organized so HTTP handling, orchestration, persistence, and
+generation can change independently. Request flow today is:
 
-- `app/main.py` sets up the application, lifespan, middleware, and error handlers.
-  `app/routers/` defines HTTP endpoints. `app/dependencies/` provides the
-  question workflow to question routes and the question-job store to readiness.
-- `app/schemas/` holds public question, health, and error schemas. API handlers map
-  service DTOs to these independently defined response models.
-- `app/config/settings.py` centralizes settings loaded from environment variables
-  and an optional `.env` file. It keeps environment-specific values out of the
-  source code; `app/config/logging.py` configures application logging.
-- `app/services/question_workflow.py` assigns job IDs and coordinates idempotency,
-  answer processing, and persistence. The processor interface and placeholder
-  live in `app/services/question_processor.py`; the `QuestionJobStore` protocol
-  lives in `app/stores/question_job_store.py` and the SQLite implementation lives
-  in `app/stores/sqlite.py`. Completed and failed jobs survive restarts and can
-  be retrieved through the status endpoint.
-- `app/domain/questions.py` defines internal question result and job DTOs.
-  `app/domain/errors.py` defines domain errors such as idempotency-key reuse.
-- `app/retrieval/` will own chunking, indexing, search, ranking, and context
-  assembly once the retrieval adapters are added.
-- `app/llm/` holds provider-neutral generation interfaces, including the
-  OpenAI Responses adapter and a deterministic fake.
-- `app/tools/` is reserved for optional callable tools the generator can use.
-- `tests/unit/` and `tests/integration/` cover configuration, logging, job
-  storage, question processing, generation, and the HTTP API. `tests/evals/`
-  is reserved for retrieval and answer-quality evaluations.
+```text
+client
+  -> FastAPI routes (`app/routers/`) and request middleware (`app/middleware.py`)
+    -> question routes -> `QuestionWorkflow` (`app/services/question_workflow.py`)
+      -> `QuestionProcessor` (`app/services/question_processor.py`)
+      -> `QuestionJobStore` (`app/stores/question_job_store.py`)
+        -> `SQLiteQuestionJobStore` (`app/stores/sqlite.py`)
+    -> readiness -> `QuestionJobStore.is_ready()`
+```
 
-This structure keeps API handlers thin and separates workflow, answer
-processing, and job persistence. Retrieval and tool packages remain placeholders;
-generation supports local and OpenAI adapters. Processing failures are stored
-as failed jobs with the safe `processing_error` category; submission still
-returns a generic HTTP 500.
+| Path | Role |
+| --- | --- |
+| `app/main.py` | Application entry point: lifespan, middleware, and error handlers. |
+| `app/middleware.py` | Request correlation IDs and one-line request logging. |
+| `app/routers/` | HTTP endpoints for health, readiness, and questions. |
+| `app/dependencies/` | Injects the shared workflow into question routes and the job store into readiness. |
+| `app/schemas/` | Public request/response models for the HTTP contract. |
+| `app/domain/` | Internal question/job DTOs and domain errors. |
+| `app/config/` | Environment-based settings and logging configuration. |
+| `app/services/` | Question workflow (IDs, idempotency, persistence) and answer processors. |
+| `app/stores/` | `QuestionJobStore` protocol and SQLite implementation. |
+| `app/llm/` | Provider-neutral generation interfaces, OpenAI Responses adapter, and a fake client. |
+| `app/retrieval/` | Placeholder for chunking, indexing, search, ranking, and context assembly. |
+| `app/tools/` | Placeholder for optional tools the generator can call. |
+| `scripts/` | Maintenance commands for SQLite backups, archives, and restore checks. |
+| `tests/unit/`, `tests/integration/` | Automated coverage for config, storage, processing, generation, and the HTTP API. |
+| `tests/evals/` | Placeholder for retrieval and answer-quality evaluations. |
+| `docs/` | Architecture notes and API sequence diagrams. |
 
-## What I'm learning here
-
-- FastAPI request validation, dependency injection, and exception handling
-- Pydantic models as API schemas and internal data-transfer objects
-- Persisting short-lived jobs to SQLite with thread-safe access
-- Writing testable services and covering them with unit and integration tests
-- Structuring a RAG pipeline so retrieval, generation, and orchestration can
-  evolve independently
-- Recording architectural decisions as the project grows
+API handlers stay thin: they validate input, call the workflow, and map results
+to public schemas. Generation supports `local` (placeholder) and `openai`
+adapters. Retrieval is not wired yet. Processing failures are stored as failed
+jobs with `error_category: "processing_error"`; submission still returns a
+generic HTTP 500. More detail lives in [`docs/architecture.md`](docs/architecture.md).
 
 ## Stack
 
@@ -112,15 +105,16 @@ Key settings include the SQLite job-store path (`QUESTIONS_DB_PATH`), archive
 and backup directories (`QUESTIONS_ARCHIVE_DIR`, `QUESTIONS_BACKUP_DIR`), live
 and archive retention in days, the Postgres/pgvector connection details, and the
 application log level (`LOG_LEVEL`, default `INFO`). `GENERATION_PROVIDER`
-selects how questions are answered: `local` (the default) returns placeholder
-answers, and `openai` sends
-the question directly to `GENERATION_MODEL` through the Responses API, without
-retrieval. Any other value fails at startup. `OPENAI_API_KEY` is loaded through
-Pydantic Settings from the environment or `.env` file, stored as a secret
-setting, and has no credential default. If supplied but empty or whitespace-only,
-settings validation fails during startup. The app can start without the
-variable, but an OpenAI-backed question fails until a key is configured. Add
-this to `.env` when using `GENERATION_PROVIDER=openai`:
+selects how questions are answered. `local` is the default and the stand-in
+for a local model: it returns a placeholder answer and does not call a
+provider. `openai` sends the question to `GENERATION_MODEL` through the
+Responses API, without retrieval. Any other value fails at startup.
+`OPENAI_API_KEY` is loaded through Pydantic Settings from the environment or
+`.env` file, stored as a secret setting, and has no credential default. If
+supplied but empty or whitespace-only, settings validation fails during
+startup. The app can start without the variable, but an OpenAI-backed
+question fails until a key is configured. Add this to `.env` when using
+`GENERATION_PROVIDER=openai`:
 
 ```dotenv
 OPENAI_API_KEY=your-key-here
@@ -129,13 +123,48 @@ OPENAI_API_KEY=your-key-here
 Do not commit real credentials to the repository.
 
 Local runs load all of these settings from environment variables or `.env`.
+To use the local placeholder instead of OpenAI, set `GENERATION_PROVIDER=local`
+or leave it unset.
+
+The OpenAI client timeout is `GENERATION_TIMEOUT_SECONDS` (default `30`).
+That limit applies to each attempt. Retries can make the total wait longer
+than one timeout. `GENERATION_MAX_OUTPUT_TOKENS`, when set, is sent as
+`max_output_tokens` and caps completion tokens. Leave it unset to omit the
+cap. `GENERATION_INSTRUCTIONS`, when set, is sent separately from the
+question. Leave it unset to send no extra instructions.
+
+The SDK client is created with `max_retries=0`, so the SDK does not retry on
+its own. The application retries HTTP 429, 500, 502, 503, and 504 up to
+`GENERATION_MAX_RETRIES` (default `2`) extra attempts. Timeouts and connection
+failures are retried at most once, even when that setting is higher, and no
+retry starts after a 60-second wall-clock budget. Authentication failures and
+bad requests are not retried. The wait before each retry is exponential
+backoff with equal jitter: the wait is between half and all of a ceiling that
+starts at half a second and caps at eight seconds. Each extra attempt is a new
+Responses API create. That call is not idempotent, so a transport retry can
+bill another generation when an earlier request reached the provider; those
+retries set `possible_duplicate_generation` on the warning log record (along
+with `retry_class` and `elapsed_seconds`). The default stdout formatter prints
+only a fixed field list, so those attributes appear in structured log capture
+but not in the one-line request-style output unless that list is extended.
+`input_tokens` and `output_tokens` are null when that provider omits usage. The
+example below shows the local placeholder, which reports zero because it does
+not call a model.
+
 Docker Compose sets `QUESTIONS_DB_PATH` to `/app/data/questions.db` and forwards
-the archive directory, backup directory, live and archive retention, and
+the archive directory, backup directory, live and archive retention, and most
 Postgres settings from the environment, using the same defaults as the
-application. `LOG_LEVEL`, `GENERATION_PROVIDER`, `GENERATION_MODEL`,
-`EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, and `OPENAI_API_KEY` stay at
-application defaults inside the container until they are added to the Compose
-service environment.
+application. The app service always sets `POSTGRES_HOST=postgres` so it can
+reach the optional Compose Postgres service; that value is not taken from
+`.env` or the host environment. It also forwards `GENERATION_PROVIDER`,
+`GENERATION_MODEL`, `GENERATION_TIMEOUT_SECONDS`, and `GENERATION_MAX_RETRIES`,
+again using the application defaults when those variables are unset. When a
+`.env` file is present, Compose loads it into the app container. That is how
+`OPENAI_API_KEY`, `GENERATION_MAX_OUTPUT_TOKENS`, and `GENERATION_INSTRUCTIONS`
+are forwarded without turning an unset value into an empty string.
+`LOG_LEVEL`, `EMBEDDING_PROVIDER`, and `EMBEDDING_MODEL` reach the container
+only when they are set in that `.env` file; otherwise they stay at application
+defaults. Exporting them in the host shell alone does not pass them through.
 
 ### Run with Docker
 
@@ -223,6 +252,11 @@ Response:
 }
 ```
 
+Finish status, refusal text, and the provider response ID stay off this
+response. Status and the provider response ID are written to the generation
+log; the question and refusal text are not. A refusal with no output text is
+returned as the answer.
+
 Retrieve the stored job:
 
 ```bash
@@ -239,9 +273,11 @@ one terminal result is saved.
 
 The default policy keeps terminal jobs in the live database for 30 days. Their
 idempotency keys are valid for at least that long; because archival runs daily,
-a key can remain valid for up to one extra day. Jobs older than the live window
-move into monthly SQLite archives for another 365 days, then expire. Archived
-jobs are kept for recovery and are not returned by the normal status endpoint.
+a key can remain valid for up to one extra day. After archival deletes a job
+from the live database, that key is no longer honored and can be reused for a
+new submission. Jobs older than the live window move into monthly SQLite
+archives for another 365 days, then expire. Archived jobs are kept for recovery
+and are not returned by the normal status endpoint.
 That is about 13 months in the live database and archives. Existing rows get a
 `created_at` timestamp on the first upgraded app startup, so their retention
 period starts at that migration time.
@@ -334,7 +370,8 @@ also includes an `x-question-id` header. That header is the `question_id`. Use
 it to poll `GET /v1/questions/{question_id}`; the job response reports
 `status: "failed"`
 and `error_category: "processing_error"` without exposing provider exception
-details.
+details. A corrupted or incomplete idempotency-key row returns `500` with
+`detail: "Idempotency-Key record is incomplete"` and no `x-question-id`.
 
 The middleware owns one request summary; API exception handlers own handled
 error records. Error records include the request ID, category, exception type,
@@ -389,9 +426,11 @@ Run the automated tests from the project root:
 pytest
 ```
 
-The real OpenAI Responses API smoke test is skipped by default. To opt in,
-configure `OPENAI_API_KEY` and `OPENAI_SMOKE_MODEL` in the environment or
-`.env`, then run:
+The default `pytest` command excludes the `openai_smoke` marker, so it does
+not call the real provider even when `RUN_OPENAI_SMOKE=1` is set. The smoke
+test also skips unless that variable is set. To opt in, configure
+`OPENAI_API_KEY` and `OPENAI_SMOKE_MODEL` in the environment or `.env`, then
+run:
 
 ```bash
 RUN_OPENAI_SMOKE=1 pytest -m openai_smoke
@@ -416,52 +455,6 @@ The integration tests exercise the HTTP API through a dependency override
 backed by an in-memory SQLite store. Unit tests cover configuration, logging,
 job storage, the placeholder and LLM processors, and the generation adapters.
 `tests/evals/` is still a placeholder for retrieval and answer-quality tests.
-
-## Notes & findings
-
-- **2026-10-20:** A small, testable scaffold is easier to extend than a
-  monolithic prototype. Separating API handlers from service logic made the
-  integration tests simple to write without invoking real retrieval or generation.
-- **2026-10-23:** Pydantic models work well as both request/response schemas
-  and internal DTOs, but it is important to keep internal-only fields out of
-  public response models as the job state grows. A dedicated `QuestionJobResponse`
-  schema (now in `app/schemas/questions.py`) maps the internal `QuestionJob` DTO
-  to the public status contract.
-- **2026-10-20:** SQLite with a thread lock is sufficient for a single-process
-  FastAPI app using thread-pool workers, but it will not scale to multiple
-  processes or workers.
-- **2026-10-20:** Placeholder endpoints reveal what the API contract should be
-  before the heavy RAG machinery exists: question in, answer + citations +
-  retrieval/model metadata out.
-- **2026-10-20:** FastAPI dependency overrides make service-level failure cases
-  easy to test without patching module globals. Managing the shared service
-  through the application lifespan also gives database connections an explicit
-  startup and shutdown boundary.
-- **2026-10-21:** Liveness and readiness answer different questions. `/health`
-  reports that the process is running, while `/ready` verifies that SQLite is
-  usable and returns `503` when the dependency is unavailable.
-- **2026-10-21:** Stable error responses require testing malformed JSON,
-  validation failures, invalid service output, and dependency failures—not
-  only successful requests. Clients receive concise errors while correlation
-  IDs preserve a path for diagnosis.
-- **2026-10-22:** Runtime invariants should use explicit error handling rather
-  than `assert`. Assertions can be disabled and do not provide a deliberate
-  HTTP response when a service unexpectedly returns an incomplete result.
-- **2026-10-22:** SQLite needs explicit concurrency and integrity decisions.
-  Locking protects a shared connection within one process, WAL mode improves
-  reader/writer behavior, configurable timeouts handle temporary contention,
-  and `INSERT`/`UPDATE` preserve duplicate and missing-job errors that
-  `REPLACE` could hide.
-- **2026-10-22:** Configuration values often need transformation as well as
-  validation. Database usernames, passwords, and names must be URL-encoded
-  before being assembled into a connection string.
-- **2026-10-23:** Multi-stage Docker builds let development and runtime images
-  share locked runtime dependencies while keeping tests and development tools
-  out of the production image. Running as a non-root user and persisting data
-  through named volumes should be designed in from the start.
-- **2026-10-23:** Observability is also a security boundary. Structured request
-  metadata and correlation IDs are useful, but exception messages from future
-  adapters must be sanitized before they are written to logs.
 
 ## What's next
 

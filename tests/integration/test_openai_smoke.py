@@ -36,11 +36,15 @@ def test_openai_responses_api_smoke():
     client = OpenAIResponsesClient(
         model=model,
         api_key=settings.openai_api_key.get_secret_value(),
+        timeout_seconds=settings.generation_timeout_seconds,
+        max_output_tokens=settings.generation_max_output_tokens,
+        instructions=settings.generation_instructions,
+        max_retries=settings.generation_max_retries,
     )
     result = client.generate("Reply with a short greeting.")
 
     assert result.answer.strip()
     assert result.provider == "openai"
     assert result.model
-    assert result.input_tokens >= 0
-    assert result.output_tokens >= 0
+    assert result.input_tokens is None or result.input_tokens >= 0
+    assert result.output_tokens is None or result.output_tokens >= 0

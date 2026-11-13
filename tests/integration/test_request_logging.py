@@ -122,10 +122,8 @@ def test_server_error_logs_category(client, caplog, store_factory):
         def create_completed_job(self, question_id, result, **kwargs):
             """Raise a runtime error to simulate a storage failure.
 
-            Args:
-                question_id: Unique identifier for the job (unused).
-                result: The completed question result (unused).
-            """
+            :param question_id: Unique identifier for the job (unused).
+            :param result: The completed question result (unused)."""
             raise RuntimeError("database password and stack details")
 
     failing_workflow = QuestionWorkflow(store_factory(store_type=FailingStore))
@@ -173,8 +171,9 @@ def test_internal_error_handler_logs_exception(client, caplog, store_factory):
         r for r in caplog.records if r.name == "app.main" and r.levelno == logging.ERROR
     ]
     assert len(handler_records) == 1
-    assert "Unhandled exception" in handler_records[0].message
+    assert "Question job state persistence failed" in handler_records[0].message
     assert handler_records[0].exception_type == "RuntimeError"
-    assert "password=<redacted>" in handler_records[0].message
-    assert "token=<redacted>" in handler_records[0].message
+    assert "password" not in handler_records[0].message
+    assert "token" not in handler_records[0].message
+    assert "x-question-id" not in response.headers
     assert "hidden" not in handler_records[0].message

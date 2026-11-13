@@ -29,6 +29,7 @@ packages = ["app"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+addopts = "-m 'not openai_smoke'"
 markers = [
     "openai_smoke: opt-in test that calls the real OpenAI Responses API",
 ]

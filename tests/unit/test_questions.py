@@ -7,18 +7,30 @@ from uuid import UUID
 
 import pytest
 
-from app.domain.errors import IdempotencyKeyReuseError
+from app.domain.errors import (
+    IdempotencyKeyReuseError,
+    IncompleteIdempotencyRecordError,
+    InvalidIdempotencyKeyError,
+)
 from app.domain.questions import (
     ModelMetrics,
     QuestionJob,
     QuestionResult,
     RetrievalMetrics,
 )
-from app.services.question_workflow import QuestionProcessingError, QuestionWorkflow
+from app.services.question_workflow import (
+    QuestionProcessingError,
+    QuestionStatePersistenceError,
+    QuestionWorkflow,
+)
 from app.stores.sqlite import SQLiteQuestionJobStore
 
 
 def _result(question_id: str) -> QuestionResult:
+    """Build a minimal completed question result for store tests.
+
+    :param question_id: Identifier assigned to the synthetic result.
+    :returns: A ``QuestionResult`` with empty citations and zero retrieval counts."""
     return QuestionResult(
         question_id=question_id,
         answer="A test answer",
@@ -259,7 +271,106 @@ def test_idempotency_records_survive_reopen_and_reject_conflicts(tmp_path, store
     assert reopened.get_job("third") is None
 
 
+def test_get_by_idempotency_key_raises_for_incomplete_record(store_factory):
+    """Incomplete fingerprint rows raise a domain error, not sqlite3.DatabaseError."""
+    store = store_factory(":memory:")
+    store._conn.execute("PRAGMA ignore_check_constraints = ON")
+    store._conn.execute(
+        "INSERT INTO question_jobs "
+        "(question_id, job_json, created_at, idempotency_key_hash, question_fingerprint) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (
+            "bad-1",
+            QuestionJob(question_id="bad-1", status="failed", error_category="processing_error")
+            .model_dump_json(),
+            "2026-01-01T00:00:00+00:00",
+            "key-hash",
+            None,
+        ),
+    )
+    store._conn.commit()
+
+    with pytest.raises(IncompleteIdempotencyRecordError):
+        store.get_by_idempotency_key("key-hash")
+
+
+def test_idempotency_pair_check_rejects_hash_without_fingerprint(store_factory):
+    """Schema CHECK rejects an idempotency hash stored without a fingerprint."""
+    store = store_factory(":memory:")
+    with pytest.raises(sqlite3.IntegrityError):
+        store._conn.execute(
+            "INSERT INTO question_jobs "
+            "(question_id, job_json, created_at, idempotency_key_hash, question_fingerprint) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                "bad-1",
+                QuestionJob(question_id="bad-1", status="pending").model_dump_json(),
+                "2026-01-01T00:00:00+00:00",
+                "key-hash",
+                None,
+            ),
+        )
+
+
+def test_store_repairs_incomplete_idempotency_rows_on_open(tmp_path, store_factory):
+    """Opening a legacy DB clears unpaired idempotency columns and adds the CHECK."""
+    db_path = str(tmp_path / "legacy.db")
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE question_jobs (
+            question_id TEXT PRIMARY KEY,
+            job_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            idempotency_key_hash TEXT,
+            question_fingerprint TEXT
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO question_jobs "
+        "(question_id, job_json, created_at, idempotency_key_hash, question_fingerprint) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (
+            "bad-1",
+            QuestionJob(question_id="bad-1", status="pending").model_dump_json(),
+            "2026-01-01T00:00:00+00:00",
+            "key-hash",
+            None,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    store = store_factory(db_path)
+    row = store._conn.execute(
+        "SELECT idempotency_key_hash, question_fingerprint FROM question_jobs "
+        "WHERE question_id = ?",
+        ("bad-1",),
+    ).fetchone()
+    assert row == (None, None)
+    assert store.get_by_idempotency_key("key-hash") is None
+    table_sql = store._conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'question_jobs'"
+    ).fetchone()[0]
+    normalized = " ".join(table_sql.split())
+    assert "idempotency_key_hash IS NULL AND question_fingerprint IS NULL" in normalized
+    assert (
+        "idempotency_key_hash IS NOT NULL AND question_fingerprint IS NOT NULL"
+        in normalized
+    )
+
+
 # Workflow tests
+
+
+@pytest.mark.parametrize("idempotency_key", ["", "   ", "x" * 256])
+def test_workflow_rejects_invalid_idempotency_keys(store_factory, idempotency_key):
+    """Blank or oversized idempotency keys raise InvalidIdempotencyKeyError."""
+    workflow = QuestionWorkflow(store_factory(":memory:"))
+
+    with pytest.raises(InvalidIdempotencyKeyError):
+        workflow.submit_question("Question", idempotency_key=idempotency_key)
 
 
 def test_submission_generates_distinct_job_ids_and_forwards_correlation(store_factory):
@@ -444,6 +555,25 @@ def test_workflow_persists_failure_without_preserving_processor_exception(store_
     assert job.status == "failed"
     assert job.error_category == "processing_error"
     assert job.result is None
+
+
+def test_workflow_wraps_completed_job_persistence_failure(store_factory):
+    """Completed-job persistence failures become QuestionStatePersistenceError."""
+    class FailingCompletedStore(SQLiteQuestionJobStore):
+        def create_completed_job(self, question_id, result, **kwargs):
+            raise RuntimeError("database connection detail must not leak")
+
+    store = store_factory(store_type=FailingCompletedStore)
+    workflow = QuestionWorkflow(store, question_id_factory=lambda: "req-1")
+
+    with pytest.raises(QuestionStatePersistenceError) as error:
+        workflow.submit_question("What is RAG?")
+
+    assert error.value.question_id == "req-1"
+    assert error.value.exception_type == "RuntimeError"
+    assert error.value.__cause__ is None
+    assert error.value.__context__ is None
+    assert store.get_job("req-1") is None
 
 
 def test_workflow_marks_mismatched_processor_result_as_failed(store_factory):

@@ -13,7 +13,7 @@ Client          Middleware       FastAPI route       SQLite store       SQLite d
   |--------------->|                 |                 |                |
   |                | add request ID |                 |                |
   |                |---------------->|                 |                |
-  |                |                 | return {ok}     |                |
+  |                |                 | {"status":"ok"} |                |
   |                |<----------------| 200 response    |                |
   |<---------------| response + x-request-id           |                |
   |                |                 |                 |                |

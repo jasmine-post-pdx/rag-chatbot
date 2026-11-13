@@ -15,7 +15,7 @@ def test_full_openapi_contract_fingerprint():
     """Preserve the complete canonical OpenAPI document across runtime extraction."""
     canonical = json.dumps(app.openapi(), sort_keys=True, separators=(",", ":"))
     assert hashlib.sha256(canonical.encode()).hexdigest() == (
-        "57e40b7054f3d2be826f072f390c52bcba35da751b38ab9b993ee6420cba1946"
+        "0b41e1909323dce17a335b315a4eb415306effa9a5b405c1cb6fa64170df3799"
     )
 
 
@@ -76,6 +76,13 @@ def test_question_openapi_contract():
         "retrieval",
         "model",
     }
+    metrics = schemas["ModelMetricsResponse"]
+    assert metrics["required"] == ["provider", "name", "input_tokens", "output_tokens"]
+    for token_field in ("input_tokens", "output_tokens"):
+        assert metrics["properties"][token_field]["anyOf"] == [
+            {"type": "integer"},
+            {"type": "null"},
+        ]
     assert schemas["QuestionJobResponse"]["properties"]["status"]["enum"] == [
         "pending", "completed", "failed"
     ]
