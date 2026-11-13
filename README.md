@@ -420,6 +420,11 @@ the SQLite store until the retrieval layer is wired up.
   retrieves terminal job records after submission finishes. A durable worker
   that survives disconnects or restarts is a future option, not part of this
   async conversion.
+- Making generation async does not by itself impose application concurrency
+  limits. Uvicorn worker count, OS resources, and provider rate limits still
+  govern how much work runs at once. Per-attempt `GENERATION_TIMEOUT_SECONDS`
+  plus retries and backoff can make total request latency longer than one
+  timeout.
 - The SQLite database path defaults to `data/questions.db` and can be changed
   with the `QUESTIONS_DB_PATH` environment variable or in a `.env` file.
 - Postgres is optional and is not required to run the current API. Start it with
@@ -461,7 +466,8 @@ ruff check app tests
 
 The integration tests exercise the HTTP API through a dependency override
 backed by an in-memory SQLite store. Unit tests cover configuration, logging,
-job storage, the placeholder and LLM processors, and the generation adapters.
+job storage, the placeholder and LLM processors, the async generation adapters,
+and event-loop isolation when SQLite or generation is blocked or cancelled.
 `tests/evals/` is still a placeholder for retrieval and answer-quality tests.
 
 ## What's next
@@ -478,8 +484,10 @@ projects.
 - [ ] Add retrieval-quality evaluations under `tests/evals/`.
 - [x] Move database path and model settings into configuration or environment
       variables.
-- [ ] Make question processing asynchronous with a real pending/completed
-      lifecycle.
+- [x] Await generation asynchronously and offload blocking SQLite work from the
+      event loop (Step 2.5).
+- [ ] Make question jobs durable across disconnects or restarts with a real
+      pending/completed worker lifecycle when latency requires it.
 
 ## License
 

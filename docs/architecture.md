@@ -41,7 +41,9 @@ so blocking DB I/O does not run on the event loop and no store lock is held
 across a provider await. Question submission assigns a job
 ID, checks any idempotency key, processes the question,
 then persists and returns its terminal result in one request; in-flight work is
-not stored. Async generation alone does not add a durable background worker.
+not stored. Async generation alone does not add a durable background worker, and it does
+not impose application concurrency limits by itself. Per-attempt generation
+timeouts plus retries can make total latency longer than one timeout.
 The HTTP request ID is passed independently to the processor.
 Processing failures are persisted as failed jobs with a safe error category; the
 submit request still returns a generic server error. API handlers map service
@@ -64,7 +66,7 @@ or an ingestion pipeline.
 
 | Path | Current contents |
 | --- | --- |
-| `tests/unit/` | Configuration, logging, SQLite job storage, question processors, and async generation adapters. |
+| `tests/unit/` | Configuration, logging, SQLite job storage, question processors, async generation adapters, and event-loop isolation. |
 | `tests/integration/` | HTTP API behavior, OpenAPI and schema contracts, lifespan, request logging, generation wiring, and an opt-in OpenAI smoke test. |
 | `tests/evals/` | Placeholder package; no retrieval or answer-quality evaluations exist yet. |
 

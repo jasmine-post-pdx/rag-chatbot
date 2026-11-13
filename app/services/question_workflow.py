@@ -51,7 +51,8 @@ class QuestionWorkflow:
     Each store call finishes and releases its lock before the workflow awaits
     generation, so a database lock is never held across a provider await.
     Async generation alone does not add a durable worker; surviving disconnects
-    or restarts remains a future option.
+    or restarts remains a future option. It also does not impose application
+    concurrency limits; worker processes and provider quotas still govern load.
     """
 
     def __init__(
