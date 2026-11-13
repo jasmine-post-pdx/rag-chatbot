@@ -25,9 +25,17 @@ router = APIRouter(prefix="/v1/questions", tags=["questions"])
 
 
 def to_question_result_response(result: QuestionResult) -> QuestionResultResponse:
-    """Map the service result and its nested values to public response models."""
+    """Map the service result and its nested values to public response models.
+
+    :param result: Internal question result DTO or mapping with the same fields.
+    :returns: The public HTTP response model for a completed answer."""
 
     def field(value: Any, name: str) -> Any:
+        """Read one attribute from a mapping or object.
+
+        :param value: Mapping or object that holds response fields.
+        :param name: Field name to read.
+        :returns: The value associated with ``name``."""
         return value[name] if isinstance(value, Mapping) else getattr(value, name)
 
     retrieval = field(result, "retrieval")
@@ -76,15 +84,11 @@ def create_question(
 ) -> QuestionResultResponse:
     """Process a question and return its answer and metadata.
 
-    Args:
-        body: The question payload from the client.
-        http_request: The HTTP request containing the middleware correlation ID.
-        question_workflow: The workflow used to process and persist the job.
-        idempotency_key: Optional client key for reusing a prior terminal result.
-
-    Returns:
-        The answer and its retrieval and model metadata.
-    """
+    :param body: The question payload from the client.
+    :param http_request: The HTTP request containing the middleware correlation ID.
+    :param question_workflow: The workflow used to process and persist the job.
+    :param idempotency_key: Optional client key for reusing a prior terminal result.
+    :returns: The answer and its retrieval and model metadata."""
     if idempotency_key is not None:
         idempotency_key = idempotency_key.strip()
         if not idempotency_key:
@@ -124,16 +128,10 @@ def get_question(
 ) -> QuestionJobResponse:
     """Return the current state of a question job.
 
-    Args:
-        question_id: Unique identifier of the requested job.
-        question_workflow: The workflow used to look up the job.
-
-    Returns:
-        The current job state, its result on success, or a safe error category.
-
-    Raises:
-        HTTPException: If no job exists for the given identifier.
-    """
+    :param question_id: Unique identifier of the requested job.
+    :param question_workflow: The workflow used to look up the job.
+    :returns: The current job state, its result on success, or a safe error category.
+    :raises HTTPException: If no job exists for the given identifier."""
     job = question_workflow.get_job(question_id)
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question not found")

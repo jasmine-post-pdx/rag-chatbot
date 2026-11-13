@@ -27,6 +27,10 @@ from app.stores.sqlite import SQLiteQuestionJobStore
 
 
 def _result(question_id: str) -> QuestionResult:
+    """Build a minimal completed question result for store tests.
+
+    :param question_id: Identifier assigned to the synthetic result.
+    :returns: A ``QuestionResult`` with empty citations and zero retrieval counts."""
     return QuestionResult(
         question_id=question_id,
         answer="A test answer",

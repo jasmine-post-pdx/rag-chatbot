@@ -22,19 +22,17 @@ _MAX_RETRY_WALL_SECONDS = 60.0
 class GenerationResult(BaseModel):
     """Generated answer and the metadata the provider actually reported.
 
-    Attributes:
-        answer: Text produced by the model, or the refusal text when the model
-            returned no output text.
-        provider: Provider identifier, such as ``"openai"`` or ``"local"``.
-        model: Model identifier reported for the generation.
-        input_tokens: Input tokens reported by the provider, or ``None`` when
-            the provider omitted usage.
-        output_tokens: Output tokens reported by the provider, or ``None`` when
-            the provider omitted usage.
-        finish_status: Provider finish status, such as ``"completed"``.
-        refusal: Refusal text when the provider returned one.
-        provider_request_id: Provider response ID for this generation.
-    """
+    :ivar answer: Text produced by the model, or the refusal text when the model
+        returned no output text.
+    :ivar provider: Provider identifier, such as ``"openai"`` or ``"local"``.
+    :ivar model: Model identifier reported for the generation.
+    :ivar input_tokens: Input tokens reported by the provider, or ``None`` when
+        the provider omitted usage.
+    :ivar output_tokens: Output tokens reported by the provider, or ``None`` when
+        the provider omitted usage.
+    :ivar finish_status: Provider finish status, such as ``"completed"``.
+    :ivar refusal: Refusal text when the provider returned one.
+    :ivar provider_request_id: Provider response ID for this generation."""
 
     answer: str
     provider: str
@@ -55,40 +53,28 @@ class LLMClient(Protocol):
     def generate(self, question: str) -> GenerationResult:
         """Generate an answer for a question.
 
-        Args:
-            question: User question to answer.
-
-        Returns:
-            Generated text with provider, model, and token usage metadata.
-        """
+        :param question: User question to answer.
+        :returns: Generated text with provider, model, and token usage metadata."""
         ...
 
 
 class FakeLLMClient:
     """Return deterministic responses without contacting a model provider.
 
-    Attributes:
-        model: Model identifier reported in each generated result.
-    """
+    :ivar model: Model identifier reported in each generated result."""
 
     def __init__(self, model: str = "fake") -> None:
         """Initialize the fake client.
 
-        Args:
-            model: Model identifier to report in generated results.
-        """
+        :param model: Model identifier to report in generated results."""
         self.model = model
         self.provider = "fake"
 
     def generate(self, question: str) -> GenerationResult:
         """Return a stable answer without making a provider request.
 
-        Args:
-            question: User question to answer.
-
-        Returns:
-            A deterministic answer with zero token usage.
-        """
+        :param question: User question to answer.
+        :returns: A deterministic answer with zero token usage."""
         return GenerationResult(
             answer=f"Fake answer to: {question}",
             provider="fake",
@@ -117,17 +103,15 @@ class OpenAIResponsesClient:
     retries attach ``possible_duplicate_generation`` to the warning log
     record (with ``retry_class`` and ``elapsed_seconds``).
 
-    Attributes:
-        _client: SDK client used to make Responses API requests, if created.
-        _model: Model identifier passed to each request.
-        _timeout_seconds: Per-request timeout used when creating the SDK client.
-        _max_output_tokens: Optional completion-token cap sent on each request.
-        _instructions: Optional instructions sent separately from the question.
-        _max_retries: Extra attempts after the first request.
-        _sleeper: Called with the backoff delay before each retry.
-        _rng: Returns a jitter factor in the range 0 to 1.
-        _clock: Monotonic clock used for the retry wall-clock budget.
-    """
+    :ivar _client: SDK client used to make Responses API requests, if created.
+    :ivar _model: Model identifier passed to each request.
+    :ivar _timeout_seconds: Per-request timeout used when creating the SDK client.
+    :ivar _max_output_tokens: Optional completion-token cap sent on each request.
+    :ivar _instructions: Optional instructions sent separately from the question.
+    :ivar _max_retries: Extra attempts after the first request.
+    :ivar _sleeper: Called with the backoff delay before each retry.
+    :ivar _rng: Returns a jitter factor in the range 0 to 1.
+    :ivar _clock: Monotonic clock used for the retry wall-clock budget."""
 
     def __init__(
         self,
@@ -145,25 +129,21 @@ class OpenAIResponsesClient:
     ) -> None:
         """Initialize the adapter with a model and optional SDK client.
 
-        Args:
-            model: OpenAI model identifier to use for requests.
-            api_key: Optional key from application settings.
-            client: Optional OpenAI SDK client, useful for isolated tests.
-            timeout_seconds: Per-request timeout in seconds for a client this
-                adapter creates. Ignored when ``client`` is injected.
-            max_output_tokens: Optional completion-token cap. Omitted from the
-                request when ``None``.
-            instructions: Optional instructions sent separately from the
-                question. Omitted from the request when ``None``.
-            max_retries: Extra attempts after the first request. Zero disables
-                application retries. Transport failures still cap at one retry.
-            sleeper: Wait function used between retries. Tests can replace it.
-            rng: Jitter source used for backoff. Tests can replace it.
-            clock: Monotonic clock used for the retry wall-clock budget.
-
-        Raises:
-            ValueError: If ``max_retries`` is negative.
-        """
+        :param model: OpenAI model identifier to use for requests.
+        :param api_key: Optional key from application settings.
+        :param client: Optional OpenAI SDK client, useful for isolated tests.
+        :param timeout_seconds: Per-request timeout in seconds for a client this
+            adapter creates. Ignored when ``client`` is injected.
+        :param max_output_tokens: Optional completion-token cap. Omitted from the
+            request when ``None``.
+        :param instructions: Optional instructions sent separately from the
+            question. Omitted from the request when ``None``.
+        :param max_retries: Extra attempts after the first request. Zero disables
+            application retries. Transport failures still cap at one retry.
+        :param sleeper: Wait function used between retries. Tests can replace it.
+        :param rng: Jitter source used for backoff. Tests can replace it.
+        :param clock: Monotonic clock used for the retry wall-clock budget.
+        :raises ValueError: If ``max_retries`` is negative."""
         if max_retries < 0:
             raise ValueError("max_retries must be zero or greater")
         self._client = client
@@ -182,12 +162,8 @@ class OpenAIResponsesClient:
     def _get_client(self):
         """Return the SDK client, creating it on first use.
 
-        Returns:
-            The OpenAI SDK client.
-
-        Raises:
-            MissingAPIKeyError: If ``OPENAI_API_KEY`` is not set.
-        """
+        :returns: The OpenAI SDK client.
+        :raises MissingAPIKeyError: If ``OPENAI_API_KEY`` is not set."""
         if self._client is None:
             if not self._api_key:
                 raise MissingAPIKeyError(
@@ -206,13 +182,9 @@ class OpenAIResponsesClient:
     def _request_body(self, question: str) -> dict[str, object]:
         """Build the Responses API request from the question and client settings.
 
-        Args:
-            question: User question sent as the request input.
-
-        Returns:
-            Request fields. Instructions and the output cap are included only
-            when configured.
-        """
+        :param question: User question sent as the request input.
+        :returns: Request fields. Instructions and the output cap are included only
+            when configured."""
         body: dict[str, object] = {"model": self._model, "input": question}
         if self._instructions is not None:
             body["instructions"] = self._instructions
@@ -223,17 +195,11 @@ class OpenAIResponsesClient:
     def generate(self, question: str) -> GenerationResult:
         """Generate an answer and return provider-reported token usage.
 
-        Args:
-            question: User question to send as the Responses API input.
-
-        Returns:
-            Generated text, the model identifier, and reported token usage.
-
-        Raises:
-            MissingAPIKeyError: If ``OPENAI_API_KEY`` is not set.
-            Exception: The provider error from the final attempt. Retryable
-                failures are retried up to ``max_retries`` extra times.
-        """
+        :param question: User question to send as the Responses API input.
+        :returns: Generated text, the model identifier, and reported token usage.
+        :raises MissingAPIKeyError: If ``OPENAI_API_KEY`` is not set.
+        :raises Exception: The provider error from the final attempt. Retryable
+            failures are retried up to ``max_retries`` extra times."""
         client = self._get_client()
         body = self._request_body(question)
         started = self._clock()
@@ -282,7 +248,11 @@ class OpenAIResponsesClient:
 
 
 def _generation_result(response: object, fallback_model: str) -> GenerationResult:
-    """Map a Responses API response without inventing omitted metadata."""
+    """Map a Responses API response without inventing omitted metadata.
+
+    :param response: Provider response object or mapping.
+    :param fallback_model: Model identifier used when the response omits ``model``.
+    :returns: A generation result with only the metadata the provider reported."""
     refusal = _refusal_text(response)
     reported_model = getattr(response, "model", None)
     if not isinstance(reported_model, str) or reported_model == "":
@@ -302,13 +272,9 @@ def _generation_result(response: object, fallback_model: str) -> GenerationResul
 def _retry_class(exc: Exception) -> str | None:
     """Classify a failure for the narrowed retry policy.
 
-    Args:
-        exc: Error raised by one generation attempt.
-
-    Returns:
-        ``"status"`` for retryable HTTP statuses, ``"transport"`` for timeouts
-        and connection failures, or ``None`` when the error must not be retried.
-    """
+    :param exc: Error raised by one generation attempt.
+    :returns: ``"status"`` for retryable HTTP statuses, ``"transport"`` for timeouts
+        and connection failures, or ``None`` when the error must not be retried."""
     if isinstance(exc, (TimeoutError, ConnectionError)):
         return "transport"
     status_code = getattr(exc, "status_code", None)
@@ -321,23 +287,22 @@ def _retry_class(exc: Exception) -> str | None:
 
 
 def _is_retryable(exc: Exception) -> bool:
-    """Return whether this failure may be retried under the policy."""
+    """Return whether this failure may be retried under the policy.
+
+    :param exc: Error raised by one generation attempt.
+    :returns: ``True`` when the narrowed retry policy classifies the error as retryable."""
     return _retry_class(exc) is not None
 
 
 def _retry_delay_seconds(failed_attempt: int, jitter: float) -> float:
     """Return an exponential backoff delay with equal jitter.
 
-    Args:
-        failed_attempt: Zero for the delay after the first failure.
-        jitter: Factor from 0 through 1 selecting a point between half the
-            ceiling and the full ceiling.
-
-    Returns:
-        Seconds to wait before the next attempt. The ceiling doubles from
+    :param failed_attempt: Zero for the delay after the first failure.
+    :param jitter: Factor from 0 through 1 selecting a point between half the
+        ceiling and the full ceiling.
+    :returns: Seconds to wait before the next attempt. The ceiling doubles from
         half a second and stops growing at eight seconds. The delay is always
-        in ``[ceiling / 2, ceiling]``.
-    """
+        in ``[ceiling / 2, ceiling]``."""
     bounded_jitter = min(1.0, max(0.0, jitter))
     ceiling = min(_BACKOFF_MAX_SECONDS, _BACKOFF_BASE_SECONDS * (2**failed_attempt))
     return ceiling * (0.5 + 0.5 * bounded_jitter)
@@ -346,14 +311,10 @@ def _retry_delay_seconds(failed_attempt: int, jitter: float) -> float:
 def _reported_token_count(usage: object | None, name: str) -> int | None:
     """Return one usage count only when the provider reported it.
 
-    Args:
-        usage: Provider usage object, or ``None`` when usage was omitted.
-        name: Usage attribute to read, such as ``"input_tokens"``.
-
-    Returns:
-        The reported count, including zero. ``None`` when usage or the count
-        was omitted.
-    """
+    :param usage: Provider usage object, or ``None`` when usage was omitted.
+    :param name: Usage attribute to read, such as ``"input_tokens"``.
+    :returns: The reported count, including zero. ``None`` when usage or the count
+        was omitted."""
     if usage is None:
         return None
     if isinstance(usage, dict):
@@ -366,7 +327,10 @@ def _reported_token_count(usage: object | None, name: str) -> int | None:
 
 
 def _finish_status(response: object) -> str | None:
-    """Return the provider finish status string, when the response has one."""
+    """Return the provider finish status string, when the response has one.
+
+    :param response: Provider response object or mapping.
+    :returns: The finish status string, or ``None`` when omitted."""
     status = getattr(response, "status", None)
     if status is None and isinstance(response, dict):
         status = response.get("status")
@@ -381,7 +345,10 @@ def _finish_status(response: object) -> str | None:
 
 
 def _provider_request_id(response: object) -> str | None:
-    """Return the provider response ID, when the response has one."""
+    """Return the provider response ID, when the response has one.
+
+    :param response: Provider response object or mapping.
+    :returns: The provider response ID string, or ``None`` when omitted."""
     request_id = getattr(response, "id", None)
     if request_id is None and isinstance(response, dict):
         request_id = response.get("id")
@@ -398,15 +365,11 @@ def _output_content_texts(
 ) -> list[str]:
     """Collect non-empty text fields from ``output[]`` content parts.
 
-    Args:
-        response: Provider response object or mapping.
-        part_type: Content part type to include, such as ``"output_text"`` or
-            ``"refusal"``.
-        text_field: Field on matching parts that holds the text.
-
-    Returns:
-        Non-empty text values in output order.
-    """
+    :param response: Provider response object or mapping.
+    :param part_type: Content part type to include, such as ``"output_text"`` or
+        ``"refusal"``.
+    :param text_field: Field on matching parts that holds the text.
+    :returns: Non-empty text values in output order."""
     output = getattr(response, "output", None)
     if output is None and isinstance(response, dict):
         output = response.get("output")
@@ -425,7 +388,10 @@ def _output_content_texts(
 
 
 def _refusal_text(response: object) -> str | None:
-    """Collect refusal text from Responses API output content."""
+    """Collect refusal text from Responses API output content.
+
+    :param response: Provider response object or mapping.
+    :returns: Joined refusal text, or ``None`` when no refusal parts are present."""
     refusals = _output_content_texts(response, part_type="refusal", text_field="refusal")
     if not refusals:
         return None
@@ -437,7 +403,10 @@ def _answer_text(response: object, refusal: str | None) -> str:
 
     Prefers the SDK ``output_text`` helper when present and non-empty. Otherwise
     gathers ``output_text`` content parts from ``output[]``, then refusal text.
-    """
+
+    :param response: Provider response object or mapping.
+    :param refusal: Refusal text already extracted from the response, if any.
+    :returns: The answer text to expose to callers."""
     output_text = getattr(response, "output_text", None)
     if output_text is None and isinstance(response, dict):
         output_text = response.get("output_text")
@@ -456,7 +425,11 @@ def _answer_text(response: object, refusal: str | None) -> str:
 
 
 def _mapping_or_attr(value: object, name: str) -> object:
-    """Read a field from a mapping or an object."""
+    """Read a field from a mapping or an object.
+
+    :param value: Mapping or object that may contain ``name``.
+    :param name: Field name to read.
+    :returns: The field value, or ``None`` when absent."""
     if isinstance(value, dict):
         return value.get(name)
     return getattr(value, name, None)

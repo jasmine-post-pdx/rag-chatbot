@@ -24,7 +24,14 @@ class QuestionProcessor(Protocol):
         question: str,
         *,
         request_id: str | None = None,
-    ) -> QuestionResult: ...
+    ) -> QuestionResult:
+        """Produce an answer result for a question.
+
+        :param question_id: Identifier of the question job being processed.
+        :param question: User question to answer.
+        :param request_id: Optional HTTP request ID used to correlate logs.
+        :returns: The generated answer with retrieval and model metadata."""
+        ...
 
 
 class PlaceholderQuestionProcessor:
@@ -37,6 +44,12 @@ class PlaceholderQuestionProcessor:
         *,
         request_id: str | None = None,
     ) -> QuestionResult:
+        """Return a placeholder answer without calling a model provider.
+
+        :param question_id: Identifier of the question job being processed.
+        :param question: User question echoed in the placeholder answer.
+        :param request_id: Optional HTTP request ID; unused by this processor.
+        :returns: A placeholder result with empty citations and zero retrieval counts."""
         return QuestionResult(
             question_id=question_id,
             answer=f"This is a placeholder answer for: {question}",
@@ -56,16 +69,12 @@ class LLMQuestionProcessor:
 
     Citations are empty and retrieval counts are zero until RAG is wired up.
 
-    Attributes:
-        _client: Language model client used to generate answers.
-    """
+    :ivar _client: Language model client used to generate answers."""
 
     def __init__(self, client: LLMClient) -> None:
         """Initialize the processor with a generation client.
 
-        Args:
-            client: Language model client used to generate answers.
-        """
+        :param client: Language model client used to generate answers."""
         self._client = client
 
     def process(
@@ -77,14 +86,10 @@ class LLMQuestionProcessor:
     ) -> QuestionResult:
         """Generate an answer and map it to a question result.
 
-        Args:
-            question_id: Identifier of the question job being processed.
-            question: User question to answer.
-            request_id: HTTP request ID used to correlate logs.
-
-        Returns:
-            The generated answer with model usage and empty retrieval metadata.
-        """
+        :param question_id: Identifier of the question job being processed.
+        :param question: User question to answer.
+        :param request_id: HTTP request ID used to correlate logs.
+        :returns: The generated answer with model usage and empty retrieval metadata."""
         started_at = time.perf_counter()
         provider = getattr(self._client, "provider", type(self._client).__name__)
         model = getattr(self._client, "model", "unknown")
@@ -142,7 +147,10 @@ class LLMQuestionProcessor:
 
 
 class UnknownGenerationProviderError(ValueError):
-    """The configured generation provider has no matching processor."""
+    """The configured generation provider has no matching processor.
+
+    Raised during processor selection when ``GENERATION_PROVIDER`` is unsupported.
+    """
 
 
 def build_question_processor(
@@ -157,22 +165,16 @@ def build_question_processor(
 ) -> QuestionProcessor:
     """Return the question processor for a generation provider.
 
-    Args:
-        provider: Generation provider name, such as ``"local"`` or ``"openai"``.
-        model: Model identifier passed to provider-backed clients.
-        openai_api_key: Optional OpenAI key supplied by application settings.
-        timeout_seconds: Per-request timeout for the OpenAI client.
-        max_output_tokens: Optional completion-token cap for the OpenAI client.
-        instructions: Optional instructions sent separately from the question.
-        max_retries: Extra OpenAI attempts after rate limits, selected server
-            errors, and transport failures.
-
-    Returns:
-        The placeholder processor for ``"local"``, or an LLM-backed processor.
-
-    Raises:
-        UnknownGenerationProviderError: If the provider is not supported.
-    """
+    :param provider: Generation provider name, such as ``"local"`` or ``"openai"``.
+    :param model: Model identifier passed to provider-backed clients.
+    :param openai_api_key: Optional OpenAI key supplied by application settings.
+    :param timeout_seconds: Per-request timeout for the OpenAI client.
+    :param max_output_tokens: Optional completion-token cap for the OpenAI client.
+    :param instructions: Optional instructions sent separately from the question.
+    :param max_retries: Extra OpenAI attempts after rate limits, selected server
+        errors, and transport failures.
+    :returns: The placeholder processor for ``"local"``, or an LLM-backed processor.
+    :raises UnknownGenerationProviderError: If the provider is not supported."""
     if provider == "local":
         return PlaceholderQuestionProcessor()
     if provider == "openai":
@@ -192,7 +194,10 @@ def build_question_processor(
 
 
 def _generation_error_category(exc: Exception) -> str:
-    """Map provider exceptions to stable categories without logging request data."""
+    """Map provider exceptions to stable categories without logging request data.
+
+    :param exc: Exception raised by a generation client.
+    :returns: A stable category such as ``provider_timeout`` or ``provider_error``."""
     name = type(exc).__name__.lower()
     if isinstance(exc, TimeoutError) or "timeout" in name:
         return "provider_timeout"

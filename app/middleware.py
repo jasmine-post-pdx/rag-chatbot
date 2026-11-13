@@ -23,7 +23,10 @@ REQUEST_ID_HEADER = "x-request-id"
 
 
 def _error_category_for_status(status_code: int) -> str | None:
-    """Return a default error category based on common HTTP status codes."""
+    """Return a default error category based on common HTTP status codes.
+
+    :param status_code: HTTP response status code.
+    :returns: ``"validation"`` for 422, ``"server"`` for 500, otherwise ``None``."""
     if status_code == 422:
         return "validation"
     if status_code == 500:
@@ -37,14 +40,10 @@ class RequestLogMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         """Generate a request ID, time the request, and log the result.
 
-        Args:
-            request: The incoming HTTP request.
-            call_next: Callable that runs the rest of the request handler stack.
-
-        Returns:
-            The response produced by the handler stack, with ``x-request-id``
-            attached.
-        """
+        :param request: The incoming HTTP request.
+        :param call_next: Callable that runs the rest of the request handler stack.
+        :returns: The response produced by the handler stack, with ``x-request-id``
+            attached."""
         request_id = normalize_request_id(request.headers.get(REQUEST_ID_HEADER))
         request.state.request_id = request_id
 

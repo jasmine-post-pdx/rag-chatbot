@@ -10,12 +10,8 @@ from app.services.question_workflow import QuestionWorkflow
 def get_question_workflow(request: Request) -> QuestionWorkflow:
     """Return the shared question workflow from application state.
 
-    Args:
-        request: The current HTTP request.
-
-    Returns:
-        The configured question service.
-    """
+    :param request: The current HTTP request.
+    :returns: The configured question workflow."""
     return request.app.state.question_workflow
 
 

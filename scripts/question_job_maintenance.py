@@ -35,10 +35,17 @@ class MaintenanceError(RuntimeError):
 
 
 def _utc_now() -> datetime:
+    """Return the current UTC time.
+
+    :returns: A timezone-aware datetime in UTC."""
     return datetime.now(UTC)
 
 
 def _format_timestamp(value: datetime) -> str:
+    """Format a datetime as a sortable UTC ISO-8601 string.
+
+    :param value: Timestamp to format.
+    :returns: An ISO-8601 UTC timestamp ending in ``Z``."""
     return (
         value.astimezone(UTC)
         .isoformat(timespec="microseconds")
@@ -47,19 +54,35 @@ def _format_timestamp(value: datetime) -> str:
 
 
 def _parse_timestamp(value: str) -> datetime:
+    """Parse a UTC ISO-8601 timestamp from storage.
+
+    :param value: Timestamp string, optionally ending in ``Z``.
+    :returns: A timezone-aware datetime in UTC."""
     return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
 
 
 def _ensure_private_directory(path: Path) -> None:
+    """Create a directory with owner-only permissions when needed.
+
+    :param path: Directory that should exist with mode ``0o700``."""
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
 
 
 def _check_database(conn: sqlite3.Connection) -> None:
+    """Fail when SQLite reports structural corruption.
+
+    :param conn: Open SQLite connection to check.
+    :raises MaintenanceError: If ``PRAGMA quick_check`` does not return ``ok``."""
     if conn.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
         raise MaintenanceError("SQLite quick_check failed")
 
 
 def _open_readonly_database(path: Path) -> sqlite3.Connection:
+    """Open an existing SQLite database in read-only mode.
+
+    :param path: Filesystem path to the database file.
+    :returns: A read-only SQLite connection.
+    :raises MaintenanceError: If the database file does not exist."""
     if not path.is_file():
         raise MaintenanceError("Question database does not exist")
     uri = f"{path.resolve().as_uri()}?mode=ro"
@@ -67,7 +90,10 @@ def _open_readonly_database(path: Path) -> sqlite3.Connection:
 
 
 def _snapshot_database(source_path: Path, destination: Path) -> None:
-    """Write a consistent, verified SQLite snapshot and atomically publish it."""
+    """Write a consistent, verified SQLite snapshot and atomically publish it.
+
+    :param source_path: Live or archive database to copy.
+    :param destination: Final snapshot path published after verification."""
     if not source_path.is_file():
         raise MaintenanceError("Source database does not exist")
     _ensure_private_directory(destination.parent)
@@ -105,12 +131,20 @@ def _snapshot_database(source_path: Path, destination: Path) -> None:
 
 
 def _snapshot_time(path: Path) -> datetime | None:
+    """Parse a snapshot timestamp from a backup filename stem.
+
+    :param path: Snapshot file whose stem should match ``SNAPSHOT_FORMAT``.
+    :returns: The snapshot time in UTC, or ``None`` when the name is not a snapshot."""
     if not SNAPSHOT_PATTERN.fullmatch(path.stem):
         return None
     return datetime.strptime(path.stem, SNAPSHOT_FORMAT).replace(tzinfo=UTC)
 
 
 def _file_digest(path: Path) -> str:
+    """Return the SHA-256 hex digest of a file.
+
+    :param path: File to hash.
+    :returns: Lowercase hexadecimal SHA-256 digest."""
     digest = hashlib.sha256()
     with path.open("rb") as file_handle:
         while chunk := file_handle.read(1024 * 1024):
@@ -119,7 +153,11 @@ def _file_digest(path: Path) -> str:
 
 
 def _rotate_snapshots(directory: Path, now: datetime) -> int:
-    """Keep hourly, daily, weekly, and monthly snapshots in their age bands."""
+    """Keep hourly, daily, weekly, and monthly snapshots in their age bands.
+
+    :param directory: Directory containing ``*.sqlite3`` snapshot files.
+    :param now: Current time used to compute snapshot ages.
+    :returns: The number of snapshot files deleted by rotation."""
     snapshots = [
         (path, _snapshot_time(path))
         for path in directory.glob("*.sqlite3")
@@ -161,7 +199,10 @@ def _rotate_snapshots(directory: Path, now: datetime) -> int:
 
 
 def backup_live_database(now: datetime | None = None) -> Path:
-    """Create a consistent live-database snapshot and apply GFS retention."""
+    """Create a consistent live-database snapshot and apply GFS retention.
+
+    :param now: Optional timestamp used for the snapshot name and rotation.
+    :returns: Path to the newly created live snapshot."""
     source = Path(settings.questions_db_path)
     now = now or _utc_now()
     directory = Path(settings.questions_backup_dir) / "live"
@@ -173,7 +214,10 @@ def backup_live_database(now: datetime | None = None) -> Path:
 
 
 def backup_archives(now: datetime | None = None) -> int:
-    """Snapshot monthly archive databases and rotate their backup tiers."""
+    """Snapshot monthly archive databases and rotate their backup tiers.
+
+    :param now: Optional timestamp used for snapshot names and rotation.
+    :returns: Count of new archive snapshots retained after duplicate suppression."""
     archive_dir = Path(settings.questions_archive_dir)
     if not archive_dir.exists():
         return 0
@@ -207,7 +251,10 @@ def backup_archives(now: datetime | None = None) -> int:
 
 
 def verify_restore(snapshot: Path | None = None) -> int:
-    """Restore a backup into a temporary database and verify its schema and rows."""
+    """Restore a backup into a temporary database and verify its schema and rows.
+
+    :param snapshot: Snapshot to restore. Defaults to the newest live snapshot.
+    :returns: Number of live job rows found in the restored database."""
     if snapshot is None:
         live_backup_dir = Path(settings.questions_backup_dir) / "live"
         candidates = [
@@ -235,6 +282,11 @@ def verify_restore(snapshot: Path | None = None) -> int:
 
 
 def _archive_path(archive_dir: Path, created_at: str) -> Path:
+    """Return the monthly archive database path for a job timestamp.
+
+    :param archive_dir: Root directory for monthly archive databases.
+    :param created_at: Job creation timestamp stored in the live database.
+    :returns: Path such as ``jobs-YYYY-MM.sqlite3`` under ``archive_dir``."""
     try:
         month = _parse_timestamp(created_at).strftime("%Y-%m")
     except ValueError as exc:
@@ -246,7 +298,10 @@ def _write_archive_rows(
     archive_path: Path,
     rows: Sequence[tuple[str, str, str]],
 ) -> None:
-    """Copy terminal jobs idempotently and verify archived rows before deletion."""
+    """Copy terminal jobs idempotently and verify archived rows before deletion.
+
+    :param archive_path: Monthly archive database that receives the rows.
+    :param rows: Sequences of ``(question_id, job_json, created_at)``."""
     _ensure_private_directory(archive_path.parent)
     conn = sqlite3.connect(archive_path, timeout=30.0)
     try:
@@ -287,6 +342,12 @@ def _archive_batch(
     archive_dir: Path,
     rows: Sequence[tuple[str, str, str]],
 ) -> tuple[int, int]:
+    """Archive one batch of live rows and delete matching live copies.
+
+    :param live_conn: Writable connection to the live question-job database.
+    :param archive_dir: Root directory for monthly archive databases.
+    :param rows: Candidate live rows as ``(question_id, job_json, created_at)``.
+    :returns: A pair of ``(archived_count, nonterminal_count)``."""
     groups: dict[Path, list[tuple[str, str, str]]] = defaultdict(list)
     nonterminal = 0
     for row in rows:
@@ -321,6 +382,11 @@ def _archive_batch(
 def _count_archive_candidates(
     live_conn: sqlite3.Connection, cutoff: str
 ) -> tuple[int, int]:
+    """Count terminal and nonterminal live jobs older than the cutoff.
+
+    :param live_conn: Readable connection to the live question-job database.
+    :param cutoff: Exclusive upper bound on ``created_at`` for archival.
+    :returns: A pair of ``(eligible_terminal_count, nonterminal_count)``."""
     eligible = 0
     nonterminal = 0
     cursor = live_conn.execute(
@@ -341,6 +407,11 @@ def _count_archive_candidates(
 
 
 def _count_expired_archive_rows(archive_dir: Path, cutoff: str) -> int:
+    """Count archived rows older than the archive retention cutoff.
+
+    :param archive_dir: Root directory for monthly archive databases.
+    :param cutoff: Exclusive upper bound on archived ``created_at`` values.
+    :returns: Number of archived rows that would be expired."""
     expired = 0
     if not archive_dir.exists():
         return expired
@@ -358,6 +429,11 @@ def _count_expired_archive_rows(archive_dir: Path, cutoff: str) -> int:
 
 
 def _prune_archive_databases(archive_dir: Path, cutoff: str) -> int:
+    """Delete expired archived rows and remove empty archive databases.
+
+    :param archive_dir: Root directory for monthly archive databases.
+    :param cutoff: Exclusive upper bound on archived ``created_at`` values.
+    :returns: Number of archived rows deleted."""
     removed = 0
     for archive_path in sorted(archive_dir.glob("jobs-*.sqlite3")):
         conn = sqlite3.connect(archive_path, timeout=30.0)
@@ -385,7 +461,12 @@ def _prune_archive_databases(archive_dir: Path, cutoff: str) -> int:
 def archive_old_jobs(
     *, dry_run: bool = False, vacuum_live: bool = False
 ) -> tuple[int, int, int]:
-    """Archive old terminal jobs, then expire old archived records."""
+    """Archive old terminal jobs, then expire old archived records.
+
+    :param dry_run: When ``True``, report counts without changing data.
+    :param vacuum_live: When ``True``, rebuild the live database after archival.
+    :returns: A triple of ``(archived_count, pruned_archive_rows, nonterminal_count)``.
+        Dry runs return ``(0, 0, nonterminal_count)``."""
     source = Path(settings.questions_db_path)
     now = _utc_now()
     live_cutoff = _format_timestamp(
@@ -475,6 +556,9 @@ def archive_old_jobs(
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    """Build the maintenance CLI argument parser.
+
+    :returns: Configured parser for backup, archive, and restore-check commands."""
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser(
@@ -509,6 +593,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Run a maintenance command and return a process exit code.
+
+    :param argv: Optional argument vector. Defaults to ``sys.argv[1:]``.
+    :returns: ``0`` on success, or ``1`` when a safe operational error occurs."""
     parser = _build_parser()
     args = parser.parse_args(argv)
     try:

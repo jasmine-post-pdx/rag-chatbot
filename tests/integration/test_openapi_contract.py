@@ -15,7 +15,7 @@ def test_full_openapi_contract_fingerprint():
     """Preserve the complete canonical OpenAPI document across runtime extraction."""
     canonical = json.dumps(app.openapi(), sort_keys=True, separators=(",", ":"))
     assert hashlib.sha256(canonical.encode()).hexdigest() == (
-        "d9fa569e566cfbf2b72c9ee5ebf95d896448424a404511f873c519afc20fdb68"
+        "0b41e1909323dce17a335b315a4eb415306effa9a5b405c1cb6fa64170df3799"
     )
 
 
