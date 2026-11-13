@@ -17,53 +17,45 @@ my experience with API design, service-layer testing, and architectural decision
 emphasizing modularity, maintainability, and systematic evaluation as steps toward 
 building more robust, production-ready AI applications.
 
-## From minimal scaffold to structured project
+## Project Structure
 
-The project began as a single FastAPI endpoint that accepted a question and
-returned a placeholder answer. I reorganized that into a more conventional
-application structure so each part of the pipeline can evolve independently:
+The application is organized so HTTP handling, orchestration, persistence, and
+generation can change independently. Request flow today is:
 
-- `app/main.py` sets up the application, lifespan, middleware, and error handlers.
-  `app/routers/` defines HTTP endpoints. `app/dependencies/` provides the
-  question workflow to question routes and the question-job store to readiness.
-- `app/schemas/` holds public question, health, and error schemas. API handlers map
-  service DTOs to these independently defined response models.
-- `app/config/settings.py` centralizes settings loaded from environment variables
-  and an optional `.env` file. It keeps environment-specific values out of the
-  source code; `app/config/logging.py` configures application logging.
-- `app/services/question_workflow.py` assigns job IDs and coordinates idempotency,
-  answer processing, and persistence. The processor interface and placeholder
-  live in `app/services/question_processor.py`; the `QuestionJobStore` protocol
-  lives in `app/stores/question_job_store.py` and the SQLite implementation lives
-  in `app/stores/sqlite.py`. Completed and failed jobs survive restarts and can
-  be retrieved through the status endpoint.
-- `app/domain/questions.py` defines internal question result and job DTOs.
-  `app/domain/errors.py` defines domain errors such as idempotency-key reuse,
-  incomplete idempotency records, and invalid idempotency keys.
-- `app/retrieval/` will own chunking, indexing, search, ranking, and context
-  assembly once the retrieval adapters are added.
-- `app/llm/` holds provider-neutral generation interfaces, including the
-  OpenAI Responses adapter and a deterministic fake.
-- `app/tools/` is reserved for optional callable tools the generator can use.
-- `tests/unit/` and `tests/integration/` cover configuration, logging, job
-  storage, question processing, generation, and the HTTP API. `tests/evals/`
-  is reserved for retrieval and answer-quality evaluations.
+```text
+client
+  -> FastAPI routes (`app/routers/`) and request middleware (`app/middleware.py`)
+    -> question routes -> `QuestionWorkflow` (`app/services/question_workflow.py`)
+      -> `QuestionProcessor` (`app/services/question_processor.py`)
+      -> `QuestionJobStore` (`app/stores/question_job_store.py`)
+        -> `SQLiteQuestionJobStore` (`app/stores/sqlite.py`)
+    -> readiness -> `QuestionJobStore.is_ready()`
+```
 
-This structure keeps API handlers thin and separates workflow, answer
-processing, and job persistence. Retrieval and tool packages remain placeholders;
-generation supports local and OpenAI adapters. Processing failures are stored
-as failed jobs with the safe `processing_error` category; submission still
-returns a generic HTTP 500.
+| Path | Role |
+| --- | --- |
+| `app/main.py` | Application entry point: lifespan, middleware, and error handlers. |
+| `app/middleware.py` | Request correlation IDs and one-line request logging. |
+| `app/routers/` | HTTP endpoints for health, readiness, and questions. |
+| `app/dependencies/` | Injects the shared workflow into question routes and the job store into readiness. |
+| `app/schemas/` | Public request/response models for the HTTP contract. |
+| `app/domain/` | Internal question/job DTOs and domain errors. |
+| `app/config/` | Environment-based settings and logging configuration. |
+| `app/services/` | Question workflow (IDs, idempotency, persistence) and answer processors. |
+| `app/stores/` | `QuestionJobStore` protocol and SQLite implementation. |
+| `app/llm/` | Provider-neutral generation interfaces, OpenAI Responses adapter, and a fake client. |
+| `app/retrieval/` | Placeholder for chunking, indexing, search, ranking, and context assembly. |
+| `app/tools/` | Placeholder for optional tools the generator can call. |
+| `scripts/` | Maintenance commands for SQLite backups, archives, and restore checks. |
+| `tests/unit/`, `tests/integration/` | Automated coverage for config, storage, processing, generation, and the HTTP API. |
+| `tests/evals/` | Placeholder for retrieval and answer-quality evaluations. |
+| `docs/` | Architecture notes and API sequence diagrams. |
 
-## What I'm learning here
-
-- FastAPI request validation, dependency injection, and exception handling
-- Pydantic models as API schemas and internal data-transfer objects
-- Persisting short-lived jobs to SQLite with thread-safe access
-- Writing testable services and covering them with unit and integration tests
-- Structuring a RAG pipeline so retrieval, generation, and orchestration can
-  evolve independently
-- Recording architectural decisions as the project grows
+API handlers stay thin: they validate input, call the workflow, and map results
+to public schemas. Generation supports `local` (placeholder) and `openai`
+adapters. Retrieval is not wired yet. Processing failures are stored as failed
+jobs with `error_category: "processing_error"`; submission still returns a
+generic HTTP 500. More detail lives in [`docs/architecture.md`](docs/architecture.md).
 
 ## Stack
 
@@ -463,52 +455,6 @@ The integration tests exercise the HTTP API through a dependency override
 backed by an in-memory SQLite store. Unit tests cover configuration, logging,
 job storage, the placeholder and LLM processors, and the generation adapters.
 `tests/evals/` is still a placeholder for retrieval and answer-quality tests.
-
-## Notes & findings
-
-- **2026-10-20:** A small, testable scaffold is easier to extend than a
-  monolithic prototype. Separating API handlers from service logic made the
-  integration tests simple to write without invoking real retrieval or generation.
-- **2026-10-23:** Pydantic models work well as both request/response schemas
-  and internal DTOs, but it is important to keep internal-only fields out of
-  public response models as the job state grows. A dedicated `QuestionJobResponse`
-  schema (now in `app/schemas/questions.py`) maps the internal `QuestionJob` DTO
-  to the public status contract.
-- **2026-10-20:** SQLite with a thread lock is sufficient for a single-process
-  FastAPI app using thread-pool workers, but it will not scale to multiple
-  processes or workers.
-- **2026-10-20:** Placeholder endpoints reveal what the API contract should be
-  before the heavy RAG machinery exists: question in, answer + citations +
-  retrieval/model metadata out.
-- **2026-10-20:** FastAPI dependency overrides make service-level failure cases
-  easy to test without patching module globals. Managing the shared service
-  through the application lifespan also gives database connections an explicit
-  startup and shutdown boundary.
-- **2026-10-21:** Liveness and readiness answer different questions. `/health`
-  reports that the process is running, while `/ready` verifies that SQLite is
-  usable and returns `503` when the dependency is unavailable.
-- **2026-10-21:** Stable error responses require testing malformed JSON,
-  validation failures, invalid service output, and dependency failures—not
-  only successful requests. Clients receive concise errors while correlation
-  IDs preserve a path for diagnosis.
-- **2026-10-22:** Runtime invariants should use explicit error handling rather
-  than `assert`. Assertions can be disabled and do not provide a deliberate
-  HTTP response when a service unexpectedly returns an incomplete result.
-- **2026-10-22:** SQLite needs explicit concurrency and integrity decisions.
-  Locking protects a shared connection within one process, WAL mode improves
-  reader/writer behavior, configurable timeouts handle temporary contention,
-  and `INSERT`/`UPDATE` preserve duplicate and missing-job errors that
-  `REPLACE` could hide.
-- **2026-10-22:** Configuration values often need transformation as well as
-  validation. Database usernames, passwords, and names must be URL-encoded
-  before being assembled into a connection string.
-- **2026-10-23:** Multi-stage Docker builds let development and runtime images
-  share locked runtime dependencies while keeping tests and development tools
-  out of the production image. Running as a non-root user and persisting data
-  through named volumes should be designed in from the start.
-- **2026-10-23:** Observability is also a security boundary. Structured request
-  metadata and correlation IDs are useful, but exception messages from future
-  adapters must be sanitized before they are written to logs.
 
 ## What's next
 
