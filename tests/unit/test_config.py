@@ -45,7 +45,7 @@ def test_empty_environment_api_key_fails_settings_validation(monkeypatch, api_ke
 
 
 def test_generation_client_settings_use_current_client_defaults(monkeypatch):
-    """Keep timeout, retries, output cap, and instructions at today's behavior.
+    """Keep timeout, retries, default output cap, and instructions defaults.
 
     :param monkeypatch: Pytest fixture used to clear environment variables."""
     for name in (
@@ -60,7 +60,7 @@ def test_generation_client_settings_use_current_client_defaults(monkeypatch):
 
     assert settings.generation_timeout_seconds == 30.0
     assert settings.generation_max_retries == 2
-    assert settings.generation_max_output_tokens is None
+    assert settings.generation_max_output_tokens == 1024
     assert settings.generation_instructions is None
 
 

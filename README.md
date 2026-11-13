@@ -126,19 +126,21 @@ Local runs load all of these settings from environment variables or `.env`.
 To use the local placeholder instead of OpenAI, set `GENERATION_PROVIDER=local`
 or leave it unset.
 
-Generation uses an async OpenAI Responses client (`AsyncOpenAI`). Callers
-await `generate`; retry backoff uses non-blocking sleep so the event loop can
-continue other work during waits.
+Generation uses an async OpenAI Responses client (`AsyncOpenAI`). When
+`GENERATION_PROVIDER=openai` and `OPENAI_API_KEY` is set, the FastAPI lifespan
+creates a shared SDK client, injects it into the processor, and closes it on
+shutdown. Callers await `generate`; retry backoff uses non-blocking sleep so
+the event loop can continue other work during waits.
 
 The OpenAI client timeout is `GENERATION_TIMEOUT_SECONDS` (default `30`).
 That limit applies to each attempt. Retries and backoff can make the total
-wait longer than one timeout. `GENERATION_MAX_OUTPUT_TOKENS`, when set, is
-sent as `max_output_tokens` and caps completion tokens. Leave it unset to
-omit the cap. `GENERATION_INSTRUCTIONS`, when set, is sent separately from the
+wait longer than one timeout. `GENERATION_MAX_OUTPUT_TOKENS` defaults to
+`1024` and is always sent as `max_output_tokens`. Override it to change the
+cap. `GENERATION_INSTRUCTIONS`, when set, is sent separately from the
 question. Leave it unset to send no extra instructions.
 
-The async SDK client is created with `max_retries=0`, so the SDK does not retry
-on its own. The application retries HTTP 429, 500, 502, 503, and 504 up to
+The shared async SDK client is created with `max_retries=0`, so the SDK does
+not retry on its own. The application retries HTTP 429, 500, 502, 503, and 504 up to
 `GENERATION_MAX_RETRIES` (default `2`) extra attempts. Timeouts and connection
 failures are retried at most once, even when that setting is higher, and no
 retry starts after a 60-second wall-clock budget. Authentication failures and

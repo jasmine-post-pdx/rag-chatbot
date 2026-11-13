@@ -31,32 +31,54 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI) -> None:
     """Manage application startup and shutdown state.
 
+    Owns the SQLite job store and, when configured, a shared async OpenAI SDK
+    client. Both are closed on shutdown or failed startup after creation.
+
     :param app: The FastAPI application instance.
     :yields: Control is returned to the application while it runs."""
     configure_logging()
-    processor = build_question_processor(
-        settings.generation_provider,
-        settings.generation_model,
+    openai_api_key = (
         settings.openai_api_key.get_secret_value()
         if settings.openai_api_key is not None
-        else None,
-        timeout_seconds=settings.generation_timeout_seconds,
-        max_output_tokens=settings.generation_max_output_tokens,
-        instructions=settings.generation_instructions,
-        max_retries=settings.generation_max_retries,
+        else None
     )
-    store = SQLiteQuestionJobStore(db_path=str(settings.questions_db_path))
+    generation_client = None
+    if settings.generation_provider == "openai" and openai_api_key is not None:
+        from openai import AsyncOpenAI
+
+        generation_client = AsyncOpenAI(
+            api_key=openai_api_key,
+            timeout=settings.generation_timeout_seconds,
+            max_retries=0,
+        )
+    store = None
     try:
+        processor = build_question_processor(
+            settings.generation_provider,
+            settings.generation_model,
+            openai_api_key,
+            timeout_seconds=settings.generation_timeout_seconds,
+            max_output_tokens=settings.generation_max_output_tokens,
+            instructions=settings.generation_instructions,
+            max_retries=settings.generation_max_retries,
+            openai_client=generation_client,
+        )
+        store = SQLiteQuestionJobStore(db_path=str(settings.questions_db_path))
         store.verify_integrity()
         app.state.question_job_store = store
+        app.state.generation_client = generation_client
         app.state.question_workflow = QuestionWorkflow(
             store=store,
             processor=processor,
         )
         yield
     finally:
-        store.close()
+        if store is not None:
+            store.close()
+        if generation_client is not None:
+            await generation_client.close()
         app.state.question_job_store = None
+        app.state.generation_client = None
         app.state.question_workflow = None
 
 

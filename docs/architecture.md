@@ -32,8 +32,9 @@ client
 | `app/retrieval/`, `app/tools/` | Package placeholders; no retrieval or tool behavior is implemented yet. |
 
 The FastAPI application lifespan creates, verifies, and owns the SQLite store,
-injects it into the workflow, and closes it on shutdown or failed startup after
-creation. Question routes receive the workflow through dependency injection, and the
+and when OpenAI generation is configured with an API key it also owns a shared
+async OpenAI SDK client. Both are injected into the workflow path and closed on
+shutdown or failed startup after creation. Question routes receive the workflow through dependency injection, and the
 readiness route checks the same store directly. Question submission assigns a job
 ID, checks any idempotency key, processes the question,
 then persists and returns its terminal result in one request; in-flight work is

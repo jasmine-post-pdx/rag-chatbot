@@ -102,8 +102,11 @@ class MissingAPIKeyError(RuntimeError):
 class OpenAIResponsesClient:
     """Generate text with OpenAI's async Python SDK and Responses API.
 
-    The async SDK client is created on first use, so the application can start
-    without ``OPENAI_API_KEY`` and only fails when generation is attempted.
+    Prefer injecting a shared ``AsyncOpenAI`` client owned by the FastAPI
+    lifespan. When no client is injected, one is created on first use so the
+    application can start without ``OPENAI_API_KEY`` and only fails when
+    generation is attempted. Lifespan-owned clients are closed on shutdown;
+    lazily created clients are not closed by this adapter.
 
     SDK retries are disabled. This client retries rate limits and selected 5xx
     responses up to ``max_retries``. Timeout and connection failures are retried
