@@ -7,6 +7,7 @@ from uuid import uuid4
 from app.domain.errors import (
     IdempotencyKeyReuseError,
     IncompleteIdempotencyRecordError,
+    InvalidIdempotencyKeyError,
 )
 from app.domain.questions import QuestionJob, QuestionResult
 from app.services.question_processor import (
@@ -90,7 +91,7 @@ class QuestionWorkflow:
         if idempotency_key is not None:
             idempotency_key = idempotency_key.strip()
             if not idempotency_key or len(idempotency_key) > 255:
-                raise ValueError("Idempotency-Key must contain 1 to 255 characters")
+                raise InvalidIdempotencyKeyError() from None
             idempotency_key_hash = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
             question_fingerprint = hashlib.sha256(question.encode("utf-8")).hexdigest()
             existing = self._store.get_by_idempotency_key(idempotency_key_hash)

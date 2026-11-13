@@ -109,6 +109,31 @@ def test_idempotent_submission_reuses_result_and_rejects_different_question(clie
     assert conflict.json() == {"detail": "Idempotency-Key was already used for a different question"}
 
 
+def test_invalid_idempotency_key_from_workflow_returns_422(client, store_factory):
+    """Workflow key validation maps to 422 when HTTP header checks are bypassed."""
+    class BypassHeaderWorkflow(QuestionWorkflow):
+        def submit_question(self, question, *, request_id=None, idempotency_key=None):
+            return super().submit_question(
+                question, request_id=request_id, idempotency_key=""
+            )
+
+    store = store_factory()
+    main.app.dependency_overrides[get_question_workflow] = lambda: BypassHeaderWorkflow(
+        store
+    )
+
+    response = client.post(
+        "/v1/questions",
+        json={"question": "Help"},
+        headers={"Idempotency-Key": "present"},
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": "Idempotency-Key must contain 1 to 255 characters"
+    }
+
+
 def test_incomplete_idempotency_record_returns_controlled_500(client, store_factory):
     """Incomplete idempotency rows return a safe 500 without sqlite details."""
     store = store_factory()

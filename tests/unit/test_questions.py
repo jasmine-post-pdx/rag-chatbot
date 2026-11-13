@@ -10,6 +10,7 @@ import pytest
 from app.domain.errors import (
     IdempotencyKeyReuseError,
     IncompleteIdempotencyRecordError,
+    InvalidIdempotencyKeyError,
 )
 from app.domain.questions import (
     ModelMetrics,
@@ -357,6 +358,15 @@ def test_store_repairs_incomplete_idempotency_rows_on_open(tmp_path, store_facto
 
 
 # Workflow tests
+
+
+@pytest.mark.parametrize("idempotency_key", ["", "   ", "x" * 256])
+def test_workflow_rejects_invalid_idempotency_keys(store_factory, idempotency_key):
+    """Blank or oversized idempotency keys raise InvalidIdempotencyKeyError."""
+    workflow = QuestionWorkflow(store_factory(":memory:"))
+
+    with pytest.raises(InvalidIdempotencyKeyError):
+        workflow.submit_question("Question", idempotency_key=idempotency_key)
 
 
 def test_submission_generates_distinct_job_ids_and_forwards_correlation(store_factory):

@@ -13,3 +13,10 @@ class IncompleteIdempotencyRecordError(ValueError):
 
     def __init__(self) -> None:
         super().__init__("Idempotency-Key record is incomplete")
+
+
+class InvalidIdempotencyKeyError(ValueError):
+    """An idempotency key is blank or longer than the allowed length."""
+
+    def __init__(self) -> None:
+        super().__init__("Idempotency-Key must contain 1 to 255 characters")

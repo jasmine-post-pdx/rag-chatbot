@@ -9,6 +9,7 @@ from app.dependencies.questions import QuestionWorkflowDep
 from app.domain.errors import (
     IdempotencyKeyReuseError,
     IncompleteIdempotencyRecordError,
+    InvalidIdempotencyKeyError,
 )
 from app.domain.questions import QuestionResult
 from app.schemas.questions import (
@@ -103,6 +104,11 @@ def create_question(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Idempotency-Key was already used for a different question",
+        ) from None
+    except InvalidIdempotencyKeyError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Idempotency-Key must contain 1 to 255 characters",
         ) from None
     except IncompleteIdempotencyRecordError:
         raise HTTPException(
