@@ -28,7 +28,7 @@ client
 | `scripts/question_job_maintenance.py` | SQLite snapshots, tiered backup rotation, and terminal-job archiving. |
 | `app/domain/` | Internal job and answer DTOs, plus domain errors such as idempotency-key reuse, incomplete idempotency records, and invalid keys. |
 | `app/schemas/` | Independent public question, health, and error schemas, including safe processing failure categories. |
-| `app/llm/` | Generation interfaces, local fake, and OpenAI Responses adapter. |
+| `app/llm/` | Async generation interfaces, local fake, and OpenAI Responses adapter. |
 | `app/retrieval/`, `app/tools/` | Package placeholders; no retrieval or tool behavior is implemented yet. |
 
 The FastAPI application lifespan creates, verifies, and owns the SQLite store,
@@ -59,7 +59,7 @@ or an ingestion pipeline.
 
 | Path | Current contents |
 | --- | --- |
-| `tests/unit/` | Configuration, logging, SQLite job storage, question processors, and generation adapters. |
+| `tests/unit/` | Configuration, logging, SQLite job storage, question processors, and async generation adapters. |
 | `tests/integration/` | HTTP API behavior, OpenAPI and schema contracts, lifespan, request logging, generation wiring, and an opt-in OpenAI smoke test. |
 | `tests/evals/` | Placeholder package; no retrieval or answer-quality evaluations exist yet. |
 

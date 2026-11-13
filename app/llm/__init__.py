@@ -1,4 +1,7 @@
-"""LLM, embedding, and related model adapters."""
+"""LLM, embedding, and related model adapters.
+
+Generation clients expose an async ``generate`` method that callers must await.
+"""
 
 from app.llm.generation import (
     FakeLLMClient,

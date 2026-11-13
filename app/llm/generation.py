@@ -1,9 +1,10 @@
 """Provider-neutral interfaces and models for text generation."""
 
+import asyncio
 import logging
 import random
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Protocol
 
 from pydantic import BaseModel, Field
@@ -17,6 +18,15 @@ _BACKOFF_MAX_SECONDS = 8.0
 # Timeouts/connection drops are ambiguous: the provider may already have billed.
 _TRANSPORT_MAX_RETRIES = 1
 _MAX_RETRY_WALL_SECONDS = 60.0
+
+AsyncSleeper = Callable[[float], Awaitable[None]]
+
+
+async def _asyncio_sleep(seconds: float) -> None:
+    """Sleep without blocking the event loop.
+
+    :param seconds: Seconds to wait before returning."""
+    await asyncio.sleep(seconds)
 
 
 class GenerationResult(BaseModel):
@@ -48,9 +58,10 @@ class LLMClient(Protocol):
     """Interface implemented by language model generation clients.
 
     Implementations return provider-reported token usage with each answer.
+    Callers must await ``generate``.
     """
 
-    def generate(self, question: str) -> GenerationResult:
+    async def generate(self, question: str) -> GenerationResult:
         """Generate an answer for a question.
 
         :param question: User question to answer.
@@ -70,7 +81,7 @@ class FakeLLMClient:
         self.model = model
         self.provider = "fake"
 
-    def generate(self, question: str) -> GenerationResult:
+    async def generate(self, question: str) -> GenerationResult:
         """Return a stable answer without making a provider request.
 
         :param question: User question to answer.
@@ -89,9 +100,9 @@ class MissingAPIKeyError(RuntimeError):
 
 
 class OpenAIResponsesClient:
-    """Generate text with OpenAI's official Python SDK and Responses API.
+    """Generate text with OpenAI's async Python SDK and Responses API.
 
-    The SDK client is created on first use, so the application can start
+    The async SDK client is created on first use, so the application can start
     without ``OPENAI_API_KEY`` and only fails when generation is attempted.
 
     SDK retries are disabled. This client retries rate limits and selected 5xx
@@ -103,13 +114,17 @@ class OpenAIResponsesClient:
     retries attach ``possible_duplicate_generation`` to the warning log
     record (with ``retry_class`` and ``elapsed_seconds``).
 
-    :ivar _client: SDK client used to make Responses API requests, if created.
+    Per-attempt timeouts apply to each Responses API call. Bounded retries and
+    backoff can make total generation latency longer than one
+    ``timeout_seconds`` value.
+
+    :ivar _client: Async SDK client used to make Responses API requests, if created.
     :ivar _model: Model identifier passed to each request.
     :ivar _timeout_seconds: Per-request timeout used when creating the SDK client.
     :ivar _max_output_tokens: Optional completion-token cap sent on each request.
     :ivar _instructions: Optional instructions sent separately from the question.
     :ivar _max_retries: Extra attempts after the first request.
-    :ivar _sleeper: Called with the backoff delay before each retry.
+    :ivar _sleeper: Awaitable wait used between retries.
     :ivar _rng: Returns a jitter factor in the range 0 to 1.
     :ivar _clock: Monotonic clock used for the retry wall-clock budget."""
 
@@ -123,15 +138,15 @@ class OpenAIResponsesClient:
         max_output_tokens: int | None = None,
         instructions: str | None = None,
         max_retries: int = 2,
-        sleeper: Callable[[float], None] = time.sleep,
+        sleeper: AsyncSleeper = _asyncio_sleep,
         rng: Callable[[], float] = random.random,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        """Initialize the adapter with a model and optional SDK client.
+        """Initialize the adapter with a model and optional async SDK client.
 
         :param model: OpenAI model identifier to use for requests.
         :param api_key: Optional key from application settings.
-        :param client: Optional OpenAI SDK client, useful for isolated tests.
+        :param client: Optional async OpenAI SDK client, useful for isolated tests.
         :param timeout_seconds: Per-request timeout in seconds for a client this
             adapter creates. Ignored when ``client`` is injected.
         :param max_output_tokens: Optional completion-token cap. Omitted from the
@@ -140,7 +155,7 @@ class OpenAIResponsesClient:
             question. Omitted from the request when ``None``.
         :param max_retries: Extra attempts after the first request. Zero disables
             application retries. Transport failures still cap at one retry.
-        :param sleeper: Wait function used between retries. Tests can replace it.
+        :param sleeper: Awaitable wait used between retries. Tests can replace it.
         :param rng: Jitter source used for backoff. Tests can replace it.
         :param clock: Monotonic clock used for the retry wall-clock budget.
         :raises ValueError: If ``max_retries`` is negative."""
@@ -160,9 +175,9 @@ class OpenAIResponsesClient:
         self.model = model
 
     def _get_client(self):
-        """Return the SDK client, creating it on first use.
+        """Return the async SDK client, creating it on first use.
 
-        :returns: The OpenAI SDK client.
+        :returns: The async OpenAI SDK client.
         :raises MissingAPIKeyError: If ``OPENAI_API_KEY`` is not set."""
         if self._client is None:
             if not self._api_key:
@@ -170,9 +185,9 @@ class OpenAIResponsesClient:
                     "OPENAI_API_KEY is not set; it is required when "
                     "GENERATION_PROVIDER is 'openai'"
                 )
-            from openai import OpenAI
+            from openai import AsyncOpenAI
 
-            self._client = OpenAI(
+            self._client = AsyncOpenAI(
                 api_key=self._api_key,
                 timeout=self._timeout_seconds,
                 max_retries=0,
@@ -192,7 +207,7 @@ class OpenAIResponsesClient:
             body["max_output_tokens"] = self._max_output_tokens
         return body
 
-    def generate(self, question: str) -> GenerationResult:
+    async def generate(self, question: str) -> GenerationResult:
         """Generate an answer and return provider-reported token usage.
 
         :param question: User question to send as the Responses API input.
@@ -206,7 +221,7 @@ class OpenAIResponsesClient:
         transport_retries = 0
         for attempt in range(self._max_retries + 1):
             try:
-                response = client.responses.create(**body)
+                response = await client.responses.create(**body)
             except Exception as exc:
                 kind = _retry_class(exc)
                 elapsed = self._clock() - started
@@ -241,7 +256,7 @@ class OpenAIResponsesClient:
                         "elapsed_seconds": round(elapsed, 3),
                     },
                 )
-                self._sleeper(_retry_delay_seconds(attempt, self._rng()))
+                await self._sleeper(_retry_delay_seconds(attempt, self._rng()))
                 continue
             return _generation_result(response, self._model)
         raise RuntimeError("generation retry loop ended without a result")
