@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 class QuestionProcessor(Protocol):
     """Produces an answer result for a question."""
 
-    def process(
+    async def process(
         self,
         question_id: str,
         question: str,
@@ -37,7 +37,7 @@ class QuestionProcessor(Protocol):
 class PlaceholderQuestionProcessor:
     """Return the current placeholder answer until RAG adapters exist."""
 
-    def process(
+    async def process(
         self,
         question_id: str,
         question: str,
@@ -65,7 +65,7 @@ class PlaceholderQuestionProcessor:
 
 
 class LLMQuestionProcessor:
-    """Answer questions by calling an LLM client directly, without retrieval.
+    """Answer questions by awaiting an LLM client directly, without retrieval.
 
     Citations are empty and retrieval counts are zero until RAG is wired up.
 
@@ -77,7 +77,7 @@ class LLMQuestionProcessor:
         :param client: Language model client used to generate answers."""
         self._client = client
 
-    def process(
+    async def process(
         self,
         question_id: str,
         question: str,
@@ -101,7 +101,7 @@ class LLMQuestionProcessor:
         if request_id is not None:
             log_fields["request_id"] = request_id
         try:
-            generation = self._client.generate(question)
+            generation = await self._client.generate(question)
         except Exception as exc:
             elapsed_ms = round((time.perf_counter() - started_at) * 1000, 3)
             error_category = _generation_error_category(exc)

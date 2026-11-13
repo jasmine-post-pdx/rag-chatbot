@@ -1,5 +1,6 @@
 """Coordinate question processing with question job persistence."""
 
+import asyncio
 import hashlib
 from collections.abc import Callable
 from uuid import uuid4
@@ -44,7 +45,14 @@ class QuestionStatePersistenceError(Exception):
 
 
 class QuestionWorkflow:
-    """Process questions and persist only terminal job states."""
+    """Process questions and persist only terminal job states.
+
+    SQLite store methods stay synchronous and run via ``asyncio.to_thread``.
+    Each store call finishes and releases its lock before the workflow awaits
+    generation, so a database lock is never held across a provider await.
+    Async generation alone does not add a durable worker; surviving disconnects
+    or restarts remains a future option.
+    """
 
     def __init__(
         self,
@@ -55,20 +63,24 @@ class QuestionWorkflow:
         """Create a workflow that coordinates processing and persistence.
 
         :param store: Persistence backend for terminal question jobs.
-        :param processor: Answer processor. Defaults to the placeholder processor.
+        :param processor: Answer processor. Defaults to the placeholder processor
+            when ``None``. Explicit ``is not None`` checks are used so a custom
+            falsy processor object is still honored.
         :param question_id_factory: Callable that returns a new question ID."""
         self._store = store
-        self._processor = processor or PlaceholderQuestionProcessor()
+        self._processor = (
+            processor if processor is not None else PlaceholderQuestionProcessor()
+        )
         self._question_id_factory = question_id_factory
 
-    def submit_question(
+    async def submit_question(
         self,
         question: str,
         *,
         request_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> QuestionResult:
-        """Assign a question ID and process the question synchronously.
+        """Assign a question ID and process the question asynchronously.
 
         ``request_id`` is the HTTP correlation ID. It is independent of the
         question ID. An idempotency key can reuse a previously persisted job.
@@ -77,14 +89,14 @@ class QuestionWorkflow:
         :param request_id: Optional HTTP correlation ID for log correlation.
         :param idempotency_key: Optional client key used to reuse a terminal result.
         :returns: The generated and persisted question result."""
-        return self._process_and_persist(
+        return await self._process_and_persist(
             self._question_id_factory(),
             question,
             request_id=request_id,
             idempotency_key=idempotency_key,
         )
 
-    def _process_and_persist(
+    async def _process_and_persist(
         self,
         question_id: str,
         question: str,
@@ -93,6 +105,10 @@ class QuestionWorkflow:
         idempotency_key: str | None = None,
     ) -> QuestionResult:
         """Process a question, then persist either success or failure.
+
+        Store lookups and writes are offloaded with ``asyncio.to_thread``. The
+        provider await happens only after those calls return, so no store lock is
+        held across generation.
 
         :param question_id: Service-generated identifier assigned to the question job.
         :param question: User question to process.
@@ -107,7 +123,9 @@ class QuestionWorkflow:
                 raise InvalidIdempotencyKeyError() from None
             idempotency_key_hash = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
             question_fingerprint = hashlib.sha256(question.encode("utf-8")).hexdigest()
-            existing = self._store.get_by_idempotency_key(idempotency_key_hash)
+            existing = await asyncio.to_thread(
+                self._store.get_by_idempotency_key, idempotency_key_hash
+            )
             if existing is not None:
                 existing_job, existing_fingerprint = existing
                 if existing_fingerprint != question_fingerprint:
@@ -121,7 +139,7 @@ class QuestionWorkflow:
         terminal_job: QuestionJob | None = None
         result: QuestionResult | None = None
         try:
-            result = self._processor.process(
+            result = await self._processor.process(
                 question_id,
                 question,
                 request_id=request_id,
@@ -133,7 +151,8 @@ class QuestionWorkflow:
         except Exception as exc:
             processing_exception_type = type(exc).__name__
             try:
-                terminal_job = self._store.create_failed_job(
+                terminal_job = await asyncio.to_thread(
+                    self._store.create_failed_job,
                     question_id,
                     "processing_error",
                     idempotency_key_hash=idempotency_key_hash,
@@ -147,7 +166,8 @@ class QuestionWorkflow:
                 persistence_exception_type = type(persistence_exc).__name__
         else:
             try:
-                terminal_job = self._store.create_completed_job(
+                terminal_job = await asyncio.to_thread(
+                    self._store.create_completed_job,
                     question_id,
                     result,
                     idempotency_key_hash=idempotency_key_hash,
@@ -178,12 +198,12 @@ class QuestionWorkflow:
             return _result_for_terminal_job(terminal_job)
         return result
 
-    def get_job(self, question_id: str) -> QuestionJob | None:
+    async def get_job(self, question_id: str) -> QuestionJob | None:
         """Return the persisted job state.
 
         :param question_id: Unique identifier of the job to load.
         :returns: The stored job, or ``None`` when it does not exist."""
-        return self._store.get_job(question_id)
+        return await asyncio.to_thread(self._store.get_job, question_id)
 
     def close(self) -> None:
         """Close the configured job store."""

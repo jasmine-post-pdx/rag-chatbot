@@ -80,15 +80,16 @@ sequenceDiagram
         else Workflow already returned an HTTP error above
             Note over Client,LLM: Request finished in an earlier branch
         else No reusable terminal job
-            WF->>Processor: process(question ID, question, request ID)
+            Note over WF,Store: Idempotency lookup already used to_thread; lock released
+            WF->>Processor: await process(question ID, question, request ID)
             opt OpenAI provider configured
-                Processor->>LLM: generate(question)
+                Processor->>LLM: await generate(question)
                 LLM-->>Processor: Answer and model usage, or error
             end
 
             alt Processing succeeds
                 Processor-->>WF: Result DTO
-                WF->>Store: Insert completed job
+                WF->>Store: await to_thread(insert completed job)
                 alt Insert persists this request's completed job
                     Store-->>WF: Persisted terminal job
                     WF-->>API: Result DTO
@@ -126,7 +127,7 @@ sequenceDiagram
                 end
             else Processing fails
                 Processor-->>WF: Processing error
-                WF->>Store: Insert failed job (processing_error)
+                WF->>Store: await to_thread(insert failed job processing_error)
                 alt Insert persists this request's failed job
                     Store-->>WF: Persisted terminal job
                     WF-->>API: QuestionProcessingError

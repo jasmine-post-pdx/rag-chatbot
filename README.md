@@ -414,10 +414,12 @@ the SQLite store until the retrieval layer is wired up.
   no citations.
 - Only the question-job endpoints are functional; there is no document ingestion
   or search endpoint.
-- `POST /v1/questions` is synchronous: it processes the question, persists the
-  completed or failed job, and returns in one request. In-flight work is not
-  persisted; the status endpoint retrieves terminal job records after submission
-  finishes. Real RAG work will likely be asynchronous.
+- `POST /v1/questions` still finishes in one request: it awaits generation,
+  persists the completed or failed job, and returns. SQLite work is offloaded
+  off the event loop. In-flight work is not persisted; the status endpoint
+  retrieves terminal job records after submission finishes. A durable worker
+  that survives disconnects or restarts is a future option, not part of this
+  async conversion.
 - The SQLite database path defaults to `data/questions.db` and can be changed
   with the `QUESTIONS_DB_PATH` environment variable or in a `.env` file.
 - Postgres is optional and is not required to run the current API. Start it with

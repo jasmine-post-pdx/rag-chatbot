@@ -35,10 +35,14 @@ The FastAPI application lifespan creates, verifies, and owns the SQLite store,
 and when OpenAI generation is configured with an API key it also owns a shared
 async OpenAI SDK client. Both are injected into the workflow path and closed on
 shutdown or failed startup after creation. Question routes receive the workflow through dependency injection, and the
-readiness route checks the same store directly. Question submission assigns a job
+readiness route checks the same store directly. `QuestionWorkflow` awaits the
+async processor and offloads each discrete SQLite call with `asyncio.to_thread`,
+so blocking DB I/O does not run on the event loop and no store lock is held
+across a provider await. Question submission assigns a job
 ID, checks any idempotency key, processes the question,
 then persists and returns its terminal result in one request; in-flight work is
-not stored. The HTTP request ID is passed independently to the processor.
+not stored. Async generation alone does not add a durable background worker.
+The HTTP request ID is passed independently to the processor.
 Processing failures are persisted as failed jobs with a safe error category; the
 submit request still returns a generic server error. API handlers map service
 results and their nested metadata to public schemas. The store serializes jobs as
