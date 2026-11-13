@@ -7,7 +7,10 @@ from uuid import UUID
 
 import pytest
 
-from app.domain.errors import IdempotencyKeyReuseError
+from app.domain.errors import (
+    IdempotencyKeyReuseError,
+    IncompleteIdempotencyRecordError,
+)
 from app.domain.questions import (
     ModelMetrics,
     QuestionJob,
@@ -261,6 +264,96 @@ def test_idempotency_records_survive_reopen_and_reject_conflicts(tmp_path, store
         )
     assert reopened.get_job("second") is None
     assert reopened.get_job("third") is None
+
+
+def test_get_by_idempotency_key_raises_for_incomplete_record(store_factory):
+    """Incomplete fingerprint rows raise a domain error, not sqlite3.DatabaseError."""
+    store = store_factory(":memory:")
+    store._conn.execute("PRAGMA ignore_check_constraints = ON")
+    store._conn.execute(
+        "INSERT INTO question_jobs "
+        "(question_id, job_json, created_at, idempotency_key_hash, question_fingerprint) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (
+            "bad-1",
+            QuestionJob(question_id="bad-1", status="failed", error_category="processing_error")
+            .model_dump_json(),
+            "2026-01-01T00:00:00+00:00",
+            "key-hash",
+            None,
+        ),
+    )
+    store._conn.commit()
+
+    with pytest.raises(IncompleteIdempotencyRecordError):
+        store.get_by_idempotency_key("key-hash")
+
+
+def test_idempotency_pair_check_rejects_hash_without_fingerprint(store_factory):
+    """Schema CHECK rejects an idempotency hash stored without a fingerprint."""
+    store = store_factory(":memory:")
+    with pytest.raises(sqlite3.IntegrityError):
+        store._conn.execute(
+            "INSERT INTO question_jobs "
+            "(question_id, job_json, created_at, idempotency_key_hash, question_fingerprint) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                "bad-1",
+                QuestionJob(question_id="bad-1", status="pending").model_dump_json(),
+                "2026-01-01T00:00:00+00:00",
+                "key-hash",
+                None,
+            ),
+        )
+
+
+def test_store_repairs_incomplete_idempotency_rows_on_open(tmp_path, store_factory):
+    """Opening a legacy DB clears unpaired idempotency columns and adds the CHECK."""
+    db_path = str(tmp_path / "legacy.db")
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE question_jobs (
+            question_id TEXT PRIMARY KEY,
+            job_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            idempotency_key_hash TEXT,
+            question_fingerprint TEXT
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO question_jobs "
+        "(question_id, job_json, created_at, idempotency_key_hash, question_fingerprint) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (
+            "bad-1",
+            QuestionJob(question_id="bad-1", status="pending").model_dump_json(),
+            "2026-01-01T00:00:00+00:00",
+            "key-hash",
+            None,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    store = store_factory(db_path)
+    row = store._conn.execute(
+        "SELECT idempotency_key_hash, question_fingerprint FROM question_jobs "
+        "WHERE question_id = ?",
+        ("bad-1",),
+    ).fetchone()
+    assert row == (None, None)
+    assert store.get_by_idempotency_key("key-hash") is None
+    table_sql = store._conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'question_jobs'"
+    ).fetchone()[0]
+    normalized = " ".join(table_sql.split())
+    assert "idempotency_key_hash IS NULL AND question_fingerprint IS NULL" in normalized
+    assert (
+        "idempotency_key_hash IS NOT NULL AND question_fingerprint IS NOT NULL"
+        in normalized
+    )
 
 
 # Workflow tests

@@ -7,8 +7,29 @@ import threading
 from datetime import UTC, datetime
 from typing import Literal
 
-from app.domain.errors import IdempotencyKeyReuseError
+from app.domain.errors import (
+    IdempotencyKeyReuseError,
+    IncompleteIdempotencyRecordError,
+)
 from app.domain.questions import QuestionJob, QuestionResult
+
+# Both idempotency columns must be null together, or both set together.
+_IDEMPOTENCY_PAIR_CHECK = (
+    "("
+    "(idempotency_key_hash IS NULL AND question_fingerprint IS NULL) OR "
+    "(idempotency_key_hash IS NOT NULL AND question_fingerprint IS NOT NULL)"
+    ")"
+)
+_QUESTION_JOBS_TABLE_SQL = f"""
+                CREATE TABLE question_jobs (
+                    question_id TEXT PRIMARY KEY,
+                    job_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    idempotency_key_hash TEXT,
+                    question_fingerprint TEXT,
+                    CHECK {_IDEMPOTENCY_PAIR_CHECK}
+                )
+                """
 
 
 class SQLiteQuestionJobStore:
@@ -29,15 +50,10 @@ class SQLiteQuestionJobStore:
         """Create the jobs table and enable WAL for file-backed databases."""
         with self._lock:
             self._conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS question_jobs (
-                    question_id TEXT PRIMARY KEY,
-                    job_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    idempotency_key_hash TEXT,
-                    question_fingerprint TEXT
+                _QUESTION_JOBS_TABLE_SQL.replace(
+                    "CREATE TABLE question_jobs",
+                    "CREATE TABLE IF NOT EXISTS question_jobs",
                 )
-                """
             )
             migrate_question_job_names(self._conn, "question_jobs")
             columns = {
@@ -62,6 +78,7 @@ class SQLiteQuestionJobStore:
                 "WHERE created_at IS NULL OR created_at = ''",
                 (migration_timestamp,),
             )
+            _repair_and_ensure_idempotency_pair_check(self._conn)
             self._conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS "
                 "idx_question_jobs_idempotency_key_hash "
@@ -159,10 +176,8 @@ class SQLiteQuestionJobStore:
                             (idempotency_key_hash,),
                         ).fetchone()
                         self._conn.commit()
-                        if row is None:
-                            raise sqlite3.DatabaseError(
-                                "Unable to load the existing idempotency record"
-                            )
+                        if row is None or row[1] is None:
+                            raise IncompleteIdempotencyRecordError() from None
                         if row[1] != question_fingerprint:
                             raise IdempotencyKeyReuseError() from None
                         return QuestionJob.model_validate_json(rename_stored_question_id(row[0]))
@@ -194,7 +209,7 @@ class SQLiteQuestionJobStore:
         if row is None:
             return None
         if row[1] is None:
-            raise sqlite3.DatabaseError("Stored idempotency record is incomplete")
+            raise IncompleteIdempotencyRecordError() from None
         return QuestionJob.model_validate_json(rename_stored_question_id(row[0])), row[1]
 
     def complete_job(self, question_id: str, result: QuestionResult) -> QuestionJob:
@@ -252,6 +267,38 @@ class SQLiteQuestionJobStore:
         """Close the SQLite connection."""
         with self._lock:
             self._conn.close()
+
+
+def _idempotency_pair_check_present(conn: sqlite3.Connection) -> bool:
+    """Return whether ``question_jobs`` already has the paired-column CHECK."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'question_jobs'"
+    ).fetchone()
+    if row is None or row[0] is None:
+        return False
+    normalized = " ".join(row[0].split())
+    return _IDEMPOTENCY_PAIR_CHECK in normalized
+
+
+def _repair_and_ensure_idempotency_pair_check(conn: sqlite3.Connection) -> None:
+    """Clear inconsistent idempotency columns and rebuild with a CHECK constraint."""
+    conn.execute(
+        "UPDATE question_jobs "
+        "SET idempotency_key_hash = NULL, question_fingerprint = NULL "
+        "WHERE (idempotency_key_hash IS NULL AND question_fingerprint IS NOT NULL) "
+        "OR (idempotency_key_hash IS NOT NULL AND question_fingerprint IS NULL)"
+    )
+    if _idempotency_pair_check_present(conn):
+        return
+    conn.execute("ALTER TABLE question_jobs RENAME TO question_jobs_legacy_idempotency")
+    conn.execute(_QUESTION_JOBS_TABLE_SQL)
+    conn.execute(
+        "INSERT INTO question_jobs "
+        "(question_id, job_json, created_at, idempotency_key_hash, question_fingerprint) "
+        "SELECT question_id, job_json, created_at, idempotency_key_hash, question_fingerprint "
+        "FROM question_jobs_legacy_idempotency"
+    )
+    conn.execute("DROP TABLE question_jobs_legacy_idempotency")
 
 
 def migrate_question_job_names(conn: sqlite3.Connection, table: str) -> None:

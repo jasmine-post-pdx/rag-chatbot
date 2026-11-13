@@ -38,7 +38,8 @@ application structure so each part of the pipeline can evolve independently:
   in `app/stores/sqlite.py`. Completed and failed jobs survive restarts and can
   be retrieved through the status endpoint.
 - `app/domain/questions.py` defines internal question result and job DTOs.
-  `app/domain/errors.py` defines domain errors such as idempotency-key reuse.
+  `app/domain/errors.py` defines domain errors such as idempotency-key reuse and
+  incomplete idempotency records.
 - `app/retrieval/` will own chunking, indexing, search, ranking, and context
   assembly once the retrieval adapters are added.
 - `app/llm/` holds provider-neutral generation interfaces, including the

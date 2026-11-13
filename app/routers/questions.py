@@ -6,7 +6,10 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Header, HTTPException, Request, status
 
 from app.dependencies.questions import QuestionWorkflowDep
-from app.domain.errors import IdempotencyKeyReuseError
+from app.domain.errors import (
+    IdempotencyKeyReuseError,
+    IncompleteIdempotencyRecordError,
+)
 from app.domain.questions import QuestionResult
 from app.schemas.questions import (
     CitationResponse,
@@ -100,6 +103,11 @@ def create_question(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Idempotency-Key was already used for a different question",
+        ) from None
+    except IncompleteIdempotencyRecordError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Idempotency-Key record is incomplete",
         ) from None
 
 

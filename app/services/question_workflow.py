@@ -4,7 +4,10 @@ import hashlib
 from collections.abc import Callable
 from uuid import uuid4
 
-from app.domain.errors import IdempotencyKeyReuseError
+from app.domain.errors import (
+    IdempotencyKeyReuseError,
+    IncompleteIdempotencyRecordError,
+)
 from app.domain.questions import QuestionJob, QuestionResult
 from app.services.question_processor import (
     PlaceholderQuestionProcessor,
@@ -100,6 +103,7 @@ class QuestionWorkflow:
         processing_exception_type: str | None = None
         persistence_exception_type: str | None = None
         idempotency_conflict = False
+        incomplete_idempotency_record = False
         terminal_job: QuestionJob | None = None
         result: QuestionResult | None = None
         try:
@@ -123,6 +127,8 @@ class QuestionWorkflow:
                 )
             except IdempotencyKeyReuseError:
                 idempotency_conflict = True
+            except IncompleteIdempotencyRecordError:
+                incomplete_idempotency_record = True
             except Exception as persistence_exc:
                 persistence_exception_type = type(persistence_exc).__name__
         else:
@@ -135,11 +141,15 @@ class QuestionWorkflow:
                 )
             except IdempotencyKeyReuseError:
                 idempotency_conflict = True
+            except IncompleteIdempotencyRecordError:
+                incomplete_idempotency_record = True
             except Exception as persistence_exc:
                 persistence_exception_type = type(persistence_exc).__name__
 
         # Raise after leaving the except blocks so the original exception objects
         # are not retained as __cause__ or __context__ on the public wrapper.
+        if incomplete_idempotency_record:
+            raise IncompleteIdempotencyRecordError() from None
         if idempotency_conflict:
             raise IdempotencyKeyReuseError() from None
         if persistence_exception_type is not None:

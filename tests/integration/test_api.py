@@ -109,6 +109,39 @@ def test_idempotent_submission_reuses_result_and_rejects_different_question(clie
     assert conflict.json() == {"detail": "Idempotency-Key was already used for a different question"}
 
 
+def test_incomplete_idempotency_record_returns_controlled_500(client, store_factory):
+    """Incomplete idempotency rows return a safe 500 without sqlite details."""
+    store = store_factory()
+    store._conn.execute("PRAGMA ignore_check_constraints = ON")
+    store._conn.execute(
+        "INSERT INTO question_jobs "
+        "(question_id, job_json, created_at, idempotency_key_hash, question_fingerprint) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (
+            "bad-1",
+            QuestionJob(
+                question_id="bad-1", status="failed", error_category="processing_error"
+            ).model_dump_json(),
+            "2026-01-01T00:00:00+00:00",
+            hashlib.sha256(b"broken-key").hexdigest(),
+            None,
+        ),
+    )
+    store._conn.commit()
+    main.app.dependency_overrides[get_question_workflow] = lambda: QuestionWorkflow(store)
+
+    response = client.post(
+        "/v1/questions",
+        json={"question": "Help"},
+        headers={"Idempotency-Key": "broken-key"},
+    )
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Idempotency-Key record is incomplete"}
+    assert "sqlite" not in response.text.lower()
+    assert "DatabaseError" not in response.text
+
+
 def test_idempotent_failed_submission_reuses_failed_job(client, store_factory):
     """A retry of a failed job retains its original ID without reprocessing."""
     class FailingProcessor:
