@@ -141,16 +141,19 @@ cap. `GENERATION_INSTRUCTIONS`, when set, is sent separately from the
 question. Leave it unset to send no extra instructions.
 
 The SDK client is created with `max_retries=0`, so the SDK does not retry on
-its own. The application retries HTTP 429, 500, 502, 503, and 504, plus
-timeouts and connection failures. It does not retry authentication failures
-or bad requests. `GENERATION_MAX_RETRIES` (default `2`) is the number of
-extra attempts, so the default cap is three provider calls. The wait before
-each retry is exponential backoff with equal jitter: the wait is between half
-and all of a ceiling that starts at half a second and caps at eight seconds. Each extra attempt is a new Responses API create.
-That call is not idempotent, so a retry can bill another generation when an
-earlier request reached the provider. `input_tokens` and `output_tokens` are
-null when that provider omits usage. The example below shows the local
-placeholder, which reports zero because it does not call a model.
+its own. The application retries HTTP 429, 500, 502, 503, and 504 up to
+`GENERATION_MAX_RETRIES` (default `2`) extra attempts. Timeouts and connection
+failures are retried at most once, even when that setting is higher, and no
+retry starts after a 60-second wall-clock budget. Authentication failures and
+bad requests are not retried. The wait before each retry is exponential
+backoff with equal jitter: the wait is between half and all of a ceiling that
+starts at half a second and caps at eight seconds. Each extra attempt is a new
+Responses API create. That call is not idempotent, so a transport retry can
+bill another generation when an earlier request reached the provider; those
+retries are logged with `possible_duplicate_generation`. `input_tokens` and
+`output_tokens` are null when that provider omits usage. The example below
+shows the local placeholder, which reports zero because it does not call a
+model.
 
 Docker Compose sets `QUESTIONS_DB_PATH` to `/app/data/questions.db` and forwards
 the archive directory, backup directory, live and archive retention, and

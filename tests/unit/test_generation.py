@@ -415,6 +415,59 @@ def test_openai_client_stops_at_the_retry_limit():
     assert delays == [0.5, 1.0]
 
 
+@pytest.mark.parametrize("failure", [TimeoutError("timed out"), ConnectionError("reset")])
+def test_openai_client_retries_transport_failures_at_most_once(failure):
+    """Timeouts and connection errors get one retry even when max_retries is higher.
+
+    Args:
+        failure: Transport error raised on every provider call.
+    """
+    responses = _ScriptedResponses([failure, failure, failure])
+    client, delays = _retrying_client(responses, max_retries=2)
+
+    with pytest.raises(type(failure)):
+        client.generate("What is RAG?")
+
+    assert len(responses.calls) == 2
+    assert delays == [0.5]
+
+
+def test_openai_client_stops_retrying_when_wall_clock_budget_exceeded():
+    """Do not start another attempt after the retry wall-clock budget."""
+    responses = _ScriptedResponses([_StatusFailure(503), _completed_response()])
+    delays: list[float] = []
+    readings = iter([0.0, 60.0])
+    client = OpenAIResponsesClient(
+        "gpt-test",
+        client=SimpleNamespace(responses=responses),
+        max_retries=2,
+        sleeper=delays.append,
+        rng=lambda: 1.0,
+        clock=lambda: next(readings),
+    )
+
+    with pytest.raises(_StatusFailure, match="status 503"):
+        client.generate("What is RAG?")
+
+    assert len(responses.calls) == 1
+    assert delays == []
+
+
+def test_openai_client_logs_possible_duplicate_on_transport_retry(caplog):
+    """Mark transport retries as possible duplicate generations."""
+    responses = _ScriptedResponses([TimeoutError("timed out"), _completed_response()])
+    client, _delays = _retrying_client(responses)
+    caplog.set_level(logging.WARNING, logger="app.llm.generation")
+
+    result = client.generate("What is RAG?")
+
+    assert result.provider_request_id == "resp_ok"
+    retry_logs = [record for record in caplog.records if record.message == "Retrying generation"]
+    assert len(retry_logs) == 1
+    assert retry_logs[0].retry_class == "transport"
+    assert retry_logs[0].possible_duplicate_generation is True
+
+
 def test_openai_client_makes_one_attempt_when_retries_are_disabled():
     """Do not retry when the retry allowance is zero."""
     responses = _ScriptedResponses([TimeoutError("timed out"), _completed_response()])

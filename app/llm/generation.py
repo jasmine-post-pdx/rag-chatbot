@@ -14,6 +14,9 @@ logger = logging.getLogger(__name__)
 _RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 _BACKOFF_BASE_SECONDS = 0.5
 _BACKOFF_MAX_SECONDS = 8.0
+# Timeouts/connection drops are ambiguous: the provider may already have billed.
+_TRANSPORT_MAX_RETRIES = 1
+_MAX_RETRY_WALL_SECONDS = 60.0
 
 
 class GenerationResult(BaseModel):
@@ -105,11 +108,13 @@ class OpenAIResponsesClient:
     The SDK client is created on first use, so the application can start
     without ``OPENAI_API_KEY`` and only fails when generation is attempted.
 
-    SDK retries are disabled. This client retries rate limits, selected 5xx
-    responses, and timeout or connection failures. Authentication failures and
-    bad requests are not retried. ``responses.create`` is not idempotent, so a
-    retry can run and bill a second generation when an earlier request reached
-    the provider.
+    SDK retries are disabled. This client retries rate limits and selected 5xx
+    responses up to ``max_retries``. Timeout and connection failures are retried
+    at most once, and no retry starts after the wall-clock budget is exhausted.
+    Authentication failures and bad requests are not retried.
+    ``responses.create`` is not idempotent, so a transport retry can bill a
+    second generation when an earlier request reached the provider; those
+    retries are logged with ``possible_duplicate_generation``.
 
     Attributes:
         _client: SDK client used to make Responses API requests, if created.
@@ -120,6 +125,7 @@ class OpenAIResponsesClient:
         _max_retries: Extra attempts after the first request.
         _sleeper: Called with the backoff delay before each retry.
         _rng: Returns a jitter factor in the range 0 to 1.
+        _clock: Monotonic clock used for the retry wall-clock budget.
     """
 
     def __init__(
@@ -134,6 +140,7 @@ class OpenAIResponsesClient:
         max_retries: int = 2,
         sleeper: Callable[[float], None] = time.sleep,
         rng: Callable[[], float] = random.random,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         """Initialize the adapter with a model and optional SDK client.
 
@@ -148,9 +155,10 @@ class OpenAIResponsesClient:
             instructions: Optional instructions sent separately from the
                 question. Omitted from the request when ``None``.
             max_retries: Extra attempts after the first request. Zero disables
-                application retries.
+                application retries. Transport failures still cap at one retry.
             sleeper: Wait function used between retries. Tests can replace it.
             rng: Jitter source used for backoff. Tests can replace it.
+            clock: Monotonic clock used for the retry wall-clock budget.
 
         Raises:
             ValueError: If ``max_retries`` is negative.
@@ -166,6 +174,7 @@ class OpenAIResponsesClient:
         self._max_retries = max_retries
         self._sleeper = sleeper
         self._rng = rng
+        self._clock = clock
         self.provider = "openai"
         self.model = model
 
@@ -226,12 +235,32 @@ class OpenAIResponsesClient:
         """
         client = self._get_client()
         body = self._request_body(question)
+        started = self._clock()
+        transport_retries = 0
         for attempt in range(self._max_retries + 1):
             try:
                 response = client.responses.create(**body)
             except Exception as exc:
-                if not _is_retryable(exc) or attempt >= self._max_retries:
+                kind = _retry_class(exc)
+                elapsed = self._clock() - started
+                within_budget = elapsed < _MAX_RETRY_WALL_SECONDS
+                within_max = attempt < self._max_retries
+                if kind == "transport":
+                    class_ok = transport_retries < _TRANSPORT_MAX_RETRIES
+                    possible_duplicate = True
+                elif kind == "status":
+                    class_ok = True
+                    possible_duplicate = False
+                else:
+                    class_ok = False
+                    possible_duplicate = False
+                will_retry = (
+                    kind is not None and within_max and within_budget and class_ok
+                )
+                if not will_retry:
                     raise
+                if kind == "transport":
+                    transport_retries += 1
                 logger.warning(
                     "Retrying generation",
                     extra={
@@ -240,6 +269,9 @@ class OpenAIResponsesClient:
                         "attempt": attempt + 1,
                         "provider_status": getattr(exc, "status_code", None),
                         "exception_type": type(exc).__name__,
+                        "retry_class": kind,
+                        "possible_duplicate_generation": possible_duplicate,
+                        "elapsed_seconds": round(elapsed, 3),
                     },
                 )
                 self._sleeper(_retry_delay_seconds(attempt, self._rng()))
@@ -266,26 +298,30 @@ def _generation_result(response: object, fallback_model: str) -> GenerationResul
     )
 
 
-def _is_retryable(exc: Exception) -> bool:
-    """Return whether this failure is safe to retry.
-
-    Rate limits, selected 5xx responses, timeouts, and connection failures are
-    retried. Authentication failures, bad requests, and other client errors
-    are not.
+def _retry_class(exc: Exception) -> str | None:
+    """Classify a failure for the narrowed retry policy.
 
     Args:
         exc: Error raised by one generation attempt.
 
     Returns:
-        ``True`` when another attempt is allowed.
+        ``"status"`` for retryable HTTP statuses, ``"transport"`` for timeouts
+        and connection failures, or ``None`` when the error must not be retried.
     """
     if isinstance(exc, (TimeoutError, ConnectionError)):
-        return True
+        return "transport"
     status_code = getattr(exc, "status_code", None)
     if isinstance(status_code, int) and status_code in _RETRYABLE_STATUS_CODES:
-        return True
+        return "status"
     name = type(exc).__name__.lower()
-    return "timeout" in name or "connection" in name
+    if "timeout" in name or "connection" in name:
+        return "transport"
+    return None
+
+
+def _is_retryable(exc: Exception) -> bool:
+    """Return whether this failure may be retried under the policy."""
+    return _retry_class(exc) is not None
 
 
 def _retry_delay_seconds(failed_attempt: int, jitter: float) -> float:
