@@ -173,8 +173,9 @@ def test_internal_error_handler_logs_exception(client, caplog, store_factory):
         r for r in caplog.records if r.name == "app.main" and r.levelno == logging.ERROR
     ]
     assert len(handler_records) == 1
-    assert "Unhandled exception" in handler_records[0].message
+    assert "Question job state persistence failed" in handler_records[0].message
     assert handler_records[0].exception_type == "RuntimeError"
-    assert "password=<redacted>" in handler_records[0].message
-    assert "token=<redacted>" in handler_records[0].message
+    assert "password" not in handler_records[0].message
+    assert "token" not in handler_records[0].message
+    assert "x-question-id" not in response.headers
     assert "hidden" not in handler_records[0].message

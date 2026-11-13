@@ -23,10 +23,10 @@ class QuestionProcessingError(Exception):
 
 
 class QuestionStatePersistenceError(Exception):
-    """A processing failure whose failed state could not be persisted."""
+    """A terminal job state could not be persisted after processing."""
 
     def __init__(self, question_id: str, exception_type: str) -> None:
-        super().__init__("Question job failure state could not be persisted")
+        super().__init__("Question job state could not be persisted")
         self.question_id = question_id
         self.exception_type = exception_type
 
@@ -125,6 +125,18 @@ class QuestionWorkflow:
                 idempotency_conflict = True
             except Exception as persistence_exc:
                 persistence_exception_type = type(persistence_exc).__name__
+        else:
+            try:
+                terminal_job = self._store.create_completed_job(
+                    question_id,
+                    result,
+                    idempotency_key_hash=idempotency_key_hash,
+                    question_fingerprint=question_fingerprint,
+                )
+            except IdempotencyKeyReuseError:
+                idempotency_conflict = True
+            except Exception as persistence_exc:
+                persistence_exception_type = type(persistence_exc).__name__
 
         # Raise after leaving the except blocks so the original exception objects
         # are not retained as __cause__ or __context__ on the public wrapper.
@@ -136,14 +148,8 @@ class QuestionWorkflow:
             if terminal_job is not None and terminal_job.question_id != question_id:
                 return _result_for_terminal_job(terminal_job)
             raise QuestionProcessingError(question_id, processing_exception_type) from None
-        if result is None:
+        if result is None or terminal_job is None:
             raise RuntimeError("Question processor returned no result")
-        terminal_job = self._store.create_completed_job(
-            question_id,
-            result,
-            idempotency_key_hash=idempotency_key_hash,
-            question_fingerprint=question_fingerprint,
-        )
         if terminal_job.question_id != question_id:
             return _result_for_terminal_job(terminal_job)
         return result

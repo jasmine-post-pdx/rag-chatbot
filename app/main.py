@@ -138,7 +138,7 @@ async def internal_error_handler(request: Request, exc: Exception) -> JSONRespon
         )
     elif isinstance(exc, QuestionStatePersistenceError):
         logger.error(
-            "Question failure state persistence failed",
+            "Question job state persistence failed",
             extra={
                 "request_id": request.state.request_id,
                 "question_id": exc.question_id,

@@ -14,7 +14,11 @@ from app.domain.questions import (
     QuestionResult,
     RetrievalMetrics,
 )
-from app.services.question_workflow import QuestionProcessingError, QuestionWorkflow
+from app.services.question_workflow import (
+    QuestionProcessingError,
+    QuestionStatePersistenceError,
+    QuestionWorkflow,
+)
 from app.stores.sqlite import SQLiteQuestionJobStore
 
 
@@ -444,6 +448,25 @@ def test_workflow_persists_failure_without_preserving_processor_exception(store_
     assert job.status == "failed"
     assert job.error_category == "processing_error"
     assert job.result is None
+
+
+def test_workflow_wraps_completed_job_persistence_failure(store_factory):
+    """Completed-job persistence failures become QuestionStatePersistenceError."""
+    class FailingCompletedStore(SQLiteQuestionJobStore):
+        def create_completed_job(self, question_id, result, **kwargs):
+            raise RuntimeError("database connection detail must not leak")
+
+    store = store_factory(store_type=FailingCompletedStore)
+    workflow = QuestionWorkflow(store, question_id_factory=lambda: "req-1")
+
+    with pytest.raises(QuestionStatePersistenceError) as error:
+        workflow.submit_question("What is RAG?")
+
+    assert error.value.question_id == "req-1"
+    assert error.value.exception_type == "RuntimeError"
+    assert error.value.__cause__ is None
+    assert error.value.__context__ is None
+    assert store.get_job("req-1") is None
 
 
 def test_workflow_marks_mismatched_processor_result_as_failed(store_factory):

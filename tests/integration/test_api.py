@@ -434,6 +434,30 @@ def test_submit_failure_state_persistence_error_returns_generic_500(client, stor
     assert store.get_job(store.failed_question_id) is None
 
 
+def test_submit_success_state_persistence_error_returns_generic_500(client, store_factory):
+    """Verify completed-job persistence errors produce a generic server response."""
+    class FailingCompletedStore(SQLiteQuestionJobStore):
+        def __init__(self):
+            super().__init__()
+            self.completed_question_id = None
+
+        def create_completed_job(self, question_id, result, **kwargs):
+            self.completed_question_id = question_id
+            raise RuntimeError("database connection detail must not reach the client")
+
+    store = store_factory(store_type=FailingCompletedStore)
+    workflow = QuestionWorkflow(store)
+    main.app.dependency_overrides[get_question_workflow] = lambda: workflow
+
+    response = client.post("/v1/questions", json={"question": "Help"})
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Internal server error"}
+    assert "database connection detail" not in response.text
+    assert "x-question-id" not in response.headers
+    assert store.get_job(store.completed_question_id) is None
+
+
 def test_submit_sqlite_failure_returns_generic_500(client, question_store):
     """Verify a SQLite operational error becomes a generic 500 without leaking details."""
     question_store._conn.execute("DROP TABLE question_jobs")
