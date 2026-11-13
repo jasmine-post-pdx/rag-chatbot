@@ -200,6 +200,34 @@ def test_openai_client_maps_refusal_when_output_text_is_empty():
     assert result.output_tokens is None
 
 
+def test_openai_client_reads_answer_from_output_items_when_helper_missing():
+    """Fall back to output[] message text when output_text is omitted."""
+    responses = _FakeResponses()
+    responses.response = SimpleNamespace(
+        model="gpt-test-2026",
+        usage=SimpleNamespace(input_tokens=3, output_tokens=5),
+        status="completed",
+        id="resp_structured",
+        output=[
+            SimpleNamespace(
+                content=[
+                    SimpleNamespace(type="output_text", text="First part."),
+                    SimpleNamespace(type="output_text", text="Second part."),
+                ]
+            )
+        ],
+    )
+    client = OpenAIResponsesClient(
+        "gpt-test", client=SimpleNamespace(responses=responses)
+    )
+
+    result = client.generate("What is RAG?")
+
+    assert result.answer == "First part.\nSecond part."
+    assert result.refusal is None
+    assert result.provider_request_id == "resp_structured"
+
+
 def test_openai_client_sends_instructions_and_output_cap_when_configured():
     """Send instructions and the output cap separately from the question."""
     responses = _FakeResponses()

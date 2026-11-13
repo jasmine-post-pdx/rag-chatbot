@@ -353,34 +353,64 @@ def _provider_request_id(response: object) -> str | None:
     return str(request_id)
 
 
-def _refusal_text(response: object) -> str | None:
-    """Collect refusal text from Responses API output content."""
+def _output_content_texts(
+    response: object,
+    *,
+    part_type: str,
+    text_field: str,
+) -> list[str]:
+    """Collect non-empty text fields from ``output[]`` content parts.
+
+    Args:
+        response: Provider response object or mapping.
+        part_type: Content part type to include, such as ``"output_text"`` or
+            ``"refusal"``.
+        text_field: Field on matching parts that holds the text.
+
+    Returns:
+        Non-empty text values in output order.
+    """
     output = getattr(response, "output", None)
     if output is None and isinstance(response, dict):
         output = response.get("output")
     if output is None:
-        return None
-    refusals: list[str] = []
+        return []
+    texts: list[str] = []
     for item in output:
         content = _mapping_or_attr(item, "content") or []
         for part in content:
-            if _mapping_or_attr(part, "type") != "refusal":
+            if _mapping_or_attr(part, "type") != part_type:
                 continue
-            text = _mapping_or_attr(part, "refusal")
+            text = _mapping_or_attr(part, text_field)
             if isinstance(text, str) and text:
-                refusals.append(text)
+                texts.append(text)
+    return texts
+
+
+def _refusal_text(response: object) -> str | None:
+    """Collect refusal text from Responses API output content."""
+    refusals = _output_content_texts(response, part_type="refusal", text_field="refusal")
     if not refusals:
         return None
     return "\n".join(refusals)
 
 
 def _answer_text(response: object, refusal: str | None) -> str:
-    """Return output text, or the refusal when the provider sent no output text."""
+    """Return output text, or the refusal when the provider sent no output text.
+
+    Prefers the SDK ``output_text`` helper when present and non-empty. Otherwise
+    gathers ``output_text`` content parts from ``output[]``, then refusal text.
+    """
     output_text = getattr(response, "output_text", None)
     if output_text is None and isinstance(response, dict):
         output_text = response.get("output_text")
+    structured_texts = _output_content_texts(
+        response, part_type="output_text", text_field="text"
+    )
     if isinstance(output_text, str) and output_text != "":
         return output_text
+    if structured_texts:
+        return "\n".join(structured_texts)
     if refusal is not None:
         return refusal
     if isinstance(output_text, str):
