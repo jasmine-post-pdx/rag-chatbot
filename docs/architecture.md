@@ -9,12 +9,12 @@ local placeholder or the configured OpenAI provider.
 
 ```text
 client
-  -> FastAPI routes (`app/routers/`) and request middleware (`app/middleware.py`)
-    -> question routes -> `QuestionWorkflow` (`app/services/question_workflow.py`)
-      -> `QuestionProcessor` (`app/services/question_processor.py`)
-      -> `QuestionJobStore` (`app/stores/question_job_store.py`)
+  -> async FastAPI routes (`app/routers/`) and request middleware (`app/middleware.py`)
+    -> question routes -> await `QuestionWorkflow` (`app/services/question_workflow.py`)
+      -> await `QuestionProcessor` (`app/services/question_processor.py`)
+      -> `QuestionJobStore` via `asyncio.to_thread` (`app/stores/question_job_store.py`)
         -> `SQLiteQuestionJobStore` (`app/stores/sqlite.py`)
-    -> readiness -> `QuestionJobStore.is_ready()`
+    -> readiness -> await to_thread(`QuestionJobStore.is_ready()`)
 ```
 
 | Area | Current responsibility |

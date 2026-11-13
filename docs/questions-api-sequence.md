@@ -38,7 +38,7 @@ sequenceDiagram
     else Request is structurally valid
         API->>Dep: get_question_workflow(request)
         Dep-->>API: Shared workflow from app state
-        API->>WF: submit_question(question, request ID, key)
+        API->>WF: await submit_question(question, request ID, key)
         WF->>WF: Generate question ID
 
         opt Idempotency key supplied

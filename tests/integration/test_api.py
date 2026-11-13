@@ -112,8 +112,8 @@ def test_idempotent_submission_reuses_result_and_rejects_different_question(clie
 def test_invalid_idempotency_key_from_workflow_returns_422(client, store_factory):
     """Workflow key validation maps to 422 when HTTP header checks are bypassed."""
     class BypassHeaderWorkflow(QuestionWorkflow):
-        def submit_question(self, question, *, request_id=None, idempotency_key=None):
-            return super().submit_question(
+        async def submit_question(self, question, *, request_id=None, idempotency_key=None):
+            return await super().submit_question(
                 question, request_id=request_id, idempotency_key=""
             )
 
@@ -173,7 +173,7 @@ def test_idempotent_failed_submission_reuses_failed_job(client, store_factory):
         def __init__(self):
             self.calls = 0
 
-        def process(self, question_id, question, *, request_id=None):
+        async def process(self, question_id, question, *, request_id=None):
             self.calls += 1
             raise TimeoutError("private provider detail")
 
@@ -346,7 +346,7 @@ def test_poll_unknown_question_is_404(client):
 def test_submit_missing_or_malformed_result_returns_generic_500(client, store_factory, result):
     """A broken workflow result is treated as a server error, not a client error."""
     class BadResponseQuestionWorkflow(QuestionWorkflow):
-        def submit_question(self, question, *, request_id=None, idempotency_key=None):
+        async def submit_question(self, question, *, request_id=None, idempotency_key=None):
             return result
 
     workflow = BadResponseQuestionWorkflow(store_factory())
@@ -366,7 +366,7 @@ def test_invalid_server_response_data_returns_500(client, store_factory):
     class BadResponseQuestionWorkflow(QuestionWorkflow):
         """Stub service that returns malformed response data."""
 
-        def get_job(self, question_id):
+        async def get_job(self, question_id):
             """Return a fake job whose result violates the response model."""
 
             class FakeJob:
@@ -426,7 +426,7 @@ def test_submit_pipeline_failure_returns_generic_500(
     class FailingProcessor:
         """Processor that fails at the simulated pipeline stage."""
 
-        def process(self, question_id, question, *, request_id=None):
+        async def process(self, question_id, question, *, request_id=None):
             raise failure_type(f"{failure_stage} failed: {error_message}")
 
     store = store_factory()
@@ -466,7 +466,7 @@ def test_submit_pipeline_failure_returns_generic_500(
 def test_submit_failure_state_persistence_error_returns_generic_500(client, store_factory):
     """Verify failure-state persistence errors produce a generic server response."""
     class FailingProcessor:
-        def process(self, question_id, question, *, request_id=None):
+        async def process(self, question_id, question, *, request_id=None):
             raise TimeoutError("provider token must not reach the client")
 
     class FailingFailureStore(SQLiteQuestionJobStore):
