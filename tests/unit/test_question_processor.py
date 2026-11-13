@@ -50,8 +50,6 @@ def test_openai_provider_receives_generation_request_settings(monkeypatch):
 def test_unknown_provider_raises(provider):
     """Reject providers without a matching processor.
 
-    Args:
-        provider: Unsupported provider name.
-    """
+    :param provider: Unsupported provider name."""
     with pytest.raises(UnknownGenerationProviderError, match="GENERATION_PROVIDER"):
         build_question_processor(provider, "any-model")

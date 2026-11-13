@@ -15,22 +15,16 @@ from app.services.question_processor import (
 def configure_generation(monkeypatch, tmp_path):
     """Point the job store at a temporary database and expose a settings helper.
 
-    Args:
-        monkeypatch: Pytest fixture used to override settings for one test.
-        tmp_path: Pytest fixture providing a per-test temporary directory.
-
-    Returns:
-        A function that sets the generation provider and model used at startup.
-    """
+    :param monkeypatch: Pytest fixture used to override settings for one test.
+    :param tmp_path: Pytest fixture providing a per-test temporary directory.
+    :returns: A function that sets the generation provider and model used at startup."""
     monkeypatch.setattr(main.settings, "questions_db_path", str(tmp_path / "q.db"))
 
     def configure(provider: str, model: str = "test-model") -> None:
         """Set the generation settings read when the app starts.
 
-        Args:
-            provider: Value for ``GENERATION_PROVIDER``.
-            model: Value for ``GENERATION_MODEL``.
-        """
+        :param provider: Value for ``GENERATION_PROVIDER``.
+        :param model: Value for ``GENERATION_MODEL``."""
         monkeypatch.setattr(main.settings, "generation_provider", provider)
         monkeypatch.setattr(main.settings, "generation_model", model)
 
@@ -53,11 +47,9 @@ def test_fake_llm_processor_returns_and_persists_api_result(
 ):
     """Verify the API returns a fake-generated answer and persists its job.
 
-    Args:
-        configure_generation: Fixture that configures generation settings and a
-            temporary SQLite job database.
-        monkeypatch: Pytest fixture used to replace the provider factory.
-    """
+    :param configure_generation: Fixture that configures generation settings and a
+        temporary SQLite job database.
+    :param monkeypatch: Pytest fixture used to replace the provider factory."""
     configure_generation("openai", "fake-model")
     monkeypatch.setattr(
         main,

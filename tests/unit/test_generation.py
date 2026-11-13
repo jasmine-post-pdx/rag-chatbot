@@ -36,9 +36,7 @@ def test_generation_result_carries_answer_provider_model_and_usage():
 def test_generation_result_rejects_negative_token_usage(token_field):
     """Reject negative token counts for either usage field.
 
-    Args:
-        token_field: Token-count field to set to an invalid negative value.
-    """
+    :param token_field: Token-count field to set to an invalid negative value."""
     with pytest.raises(ValidationError):
         GenerationResult(
             answer="A generated answer",
@@ -57,12 +55,8 @@ def test_llm_client_uses_structural_generate_interface():
         def generate(self, question: str) -> GenerationResult:
             """Return a result for the supplied question.
 
-            Args:
-                question: User question to answer.
-
-            Returns:
-                An answer echoing the question, with fixed usage metadata.
-            """
+            :param question: User question to answer.
+            :returns: An answer echoing the question, with fixed usage metadata."""
             return GenerationResult(
                 answer=f"Answer to: {question}",
                 provider="test-provider",
@@ -79,9 +73,7 @@ def test_llm_client_uses_structural_generate_interface():
 class _FakeResponses:
     """Record Responses API calls and return a canned response.
 
-    Attributes:
-        calls: Keyword arguments passed to each ``create`` call, in call order.
-    """
+    :ivar calls: Keyword arguments passed to each ``create`` call, in call order."""
 
     def __init__(self) -> None:
         """Initialize the fake with no recorded calls."""
@@ -98,12 +90,8 @@ class _FakeResponses:
     def create(self, **kwargs):
         """Record the request and return the configured response.
 
-        Args:
-            **kwargs: Request parameters, such as ``model`` and ``input``.
-
-        Returns:
-            An object shaped like an SDK response.
-        """
+        :param **kwargs: Request parameters, such as ``model`` and ``input``.
+        :returns: An object shaped like an SDK response."""
         self.calls.append(kwargs)
         return self.response
 
@@ -254,9 +242,7 @@ def test_openai_client_sends_instructions_and_output_cap_when_configured():
 def test_openai_client_configures_sdk_timeout_without_sdk_retries(monkeypatch):
     """Create the SDK client with the configured timeout and no SDK retries.
 
-    Args:
-        monkeypatch: Pytest fixture used to replace the OpenAI SDK constructor.
-    """
+    :param monkeypatch: Pytest fixture used to replace the OpenAI SDK constructor."""
     constructed_clients = []
     responses = _FakeResponses()
 
@@ -286,9 +272,7 @@ class _StatusFailure(Exception):
     def __init__(self, status_code: int) -> None:
         """Store the status code used by the retry policy.
 
-        Args:
-            status_code: HTTP status reported by the provider.
-        """
+        :param status_code: HTTP status reported by the provider."""
         super().__init__(f"status {status_code}")
         self.status_code = status_code
 
@@ -299,9 +283,7 @@ class _ScriptedResponses:
     def __init__(self, outcomes: list[object]) -> None:
         """Store the outcomes and start with no recorded calls.
 
-        Args:
-            outcomes: Response objects or exceptions, consumed one per call.
-        """
+        :param outcomes: Response objects or exceptions, consumed one per call."""
         self._outcomes = list(outcomes)
         self.calls: list[dict] = []
 
@@ -329,13 +311,9 @@ def _completed_response():
 def _retrying_client(responses: _ScriptedResponses, max_retries: int = 2):
     """Build a client whose retries record delays instead of sleeping.
 
-    Args:
-        responses: Scripted Responses endpoint.
-        max_retries: Extra attempts allowed after the first request.
-
-    Returns:
-        The client and the list of recorded backoff delays.
-    """
+    :param responses: Scripted Responses endpoint.
+    :param max_retries: Extra attempts allowed after the first request.
+    :returns: The client and the list of recorded backoff delays."""
     delays: list[float] = []
     client = OpenAIResponsesClient(
         "gpt-test",
@@ -373,9 +351,7 @@ def test_openai_client_retries_rate_limit_then_returns_success():
 def test_openai_client_retries_transient_and_transport_failures(failure):
     """Retry selected server errors, timeouts, and connection failures.
 
-    Args:
-        failure: Retryable error raised by the first provider call.
-    """
+    :param failure: Retryable error raised by the first provider call."""
     responses = _ScriptedResponses([failure, _completed_response()])
     client, delays = _retrying_client(responses)
 
@@ -390,9 +366,7 @@ def test_openai_client_retries_transient_and_transport_failures(failure):
 def test_openai_client_does_not_retry_client_or_unselected_errors(status_code):
     """Leave authentication, bad requests, and unselected statuses unretried.
 
-    Args:
-        status_code: Provider status that must fail on the first attempt.
-    """
+    :param status_code: Provider status that must fail on the first attempt."""
     responses = _ScriptedResponses([_StatusFailure(status_code), _completed_response()])
     client, delays = _retrying_client(responses)
 
@@ -419,9 +393,7 @@ def test_openai_client_stops_at_the_retry_limit():
 def test_openai_client_retries_transport_failures_at_most_once(failure):
     """Timeouts and connection errors get one retry even when max_retries is higher.
 
-    Args:
-        failure: Transport error raised on every provider call.
-    """
+    :param failure: Transport error raised on every provider call."""
     responses = _ScriptedResponses([failure, failure, failure])
     client, delays = _retrying_client(responses, max_retries=2)
 
@@ -483,9 +455,7 @@ def test_openai_client_makes_one_attempt_when_retries_are_disabled():
 def test_openai_client_caps_backoff_and_omits_the_question_from_retry_logs(caplog):
     """Cap backoff at eight seconds and keep the question out of retry logs.
 
-    Args:
-        caplog: Pytest fixture used to capture structured log records.
-    """
+    :param caplog: Pytest fixture used to capture structured log records."""
     responses = _ScriptedResponses([_StatusFailure(503)] * 7)
     client, delays = _retrying_client(responses, max_retries=6)
     caplog.set_level(logging.WARNING, logger="app.llm.generation")
@@ -517,11 +487,9 @@ def test_openai_client_caps_backoff_and_omits_the_question_from_retry_logs(caplo
 def test_retry_delay_uses_equal_jitter(failed_attempt, jitter, expected):
     """Equal jitter keeps delays in [ceiling / 2, ceiling], never zero.
 
-    Args:
-        failed_attempt: Zero-based failure count used for the backoff ceiling.
-        jitter: Injected jitter factor from 0 through 1.
-        expected: Delay produced by equal jitter for that attempt and factor.
-    """
+    :param failed_attempt: Zero-based failure count used for the backoff ceiling.
+    :param jitter: Injected jitter factor from 0 through 1.
+    :param expected: Delay produced by equal jitter for that attempt and factor."""
     from app.llm.generation import _retry_delay_seconds
 
     assert _retry_delay_seconds(failed_attempt, jitter) == expected

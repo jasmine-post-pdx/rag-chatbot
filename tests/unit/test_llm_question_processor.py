@@ -13,9 +13,7 @@ from app.services.question_workflow import QuestionProcessingError, QuestionWork
 class RecordingClient:
     """Return a fixed generation result and record the question it received.
 
-    Attributes:
-        questions: Questions passed to ``generate``, in call order.
-    """
+    :ivar questions: Questions passed to ``generate``, in call order."""
 
     def __init__(self) -> None:
         """Initialize the client with no recorded questions."""
@@ -24,12 +22,8 @@ class RecordingClient:
     def generate(self, question: str) -> GenerationResult:
         """Record the question and return fixed usage metadata.
 
-        Args:
-            question: User question to record.
-
-        Returns:
-            A fixed answer with known provider, model, and token usage.
-        """
+        :param question: User question to record.
+        :returns: A fixed answer with known provider, model, and token usage."""
         self.questions.append(question)
         return GenerationResult(
             answer="A generated answer",
@@ -46,12 +40,8 @@ class FailingClient:
     def generate(self, question: str) -> GenerationResult:
         """Raise a provider failure.
 
-        Args:
-            question: User question that would have been answered.
-
-        Raises:
-            RuntimeError: Always, to simulate an unavailable provider.
-        """
+        :param question: User question that would have been answered.
+        :raises RuntimeError: Always, to simulate an unavailable provider."""
         raise RuntimeError("provider unavailable")
 
 
@@ -76,9 +66,7 @@ def test_processor_maps_generation_result_to_question_result():
 def test_processor_logs_generation_metadata_with_correlation_and_question_ids(caplog):
     """Log provider metadata, usage, and both IDs after successful generation.
 
-    Args:
-        caplog: Pytest fixture used to capture structured log records.
-    """
+    :param caplog: Pytest fixture used to capture structured log records."""
     caplog.set_level(logging.INFO, logger="app.services.question_processor")
     processor = LLMQuestionProcessor(RecordingClient())
 
@@ -106,9 +94,7 @@ def test_processor_logs_generation_metadata_with_correlation_and_question_ids(ca
 def test_processor_maps_missing_usage_and_logs_status_without_refusal(caplog):
     """Preserve null usage and log status and provider ID, not refusal text.
 
-    Args:
-        caplog: Pytest fixture used to capture structured log records.
-    """
+    :param caplog: Pytest fixture used to capture structured log records."""
 
     class MissingUsageClient:
         """Return a refusal with no reported token usage."""
@@ -160,9 +146,7 @@ def test_processor_maps_missing_usage_and_logs_status_without_refusal(caplog):
 def test_processor_logs_sanitized_failure_category_without_question(caplog):
     """Log a safe categorized provider failure without exposing prompt text.
 
-    Args:
-        caplog: Pytest fixture used to capture structured log records.
-    """
+    :param caplog: Pytest fixture used to capture structured log records."""
     class FailingClient:
         """Raise a provider-style error containing sensitive request values."""
 
@@ -260,12 +244,10 @@ def test_workflow_logs_failure_class_and_persists_processing_error(
 ):
     """Log the provider failure class and store the public processing error.
 
-    Args:
-        store_factory: Fixture that creates a SQLite job store.
-        caplog: Pytest fixture used to capture structured log records.
-        error_type: Exception class raised by the fake provider client.
-        expected_category: Log category expected for that exception class.
-    """
+    :param store_factory: Fixture that creates a SQLite job store.
+    :param caplog: Pytest fixture used to capture structured log records.
+    :param error_type: Exception class raised by the fake provider client.
+    :param expected_category: Log category expected for that exception class."""
 
     class ClassifiedFailureClient:
         """Raise one named provider failure without revealing the question."""

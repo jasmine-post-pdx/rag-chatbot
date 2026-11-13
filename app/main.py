@@ -31,12 +31,8 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI) -> None:
     """Manage application startup and shutdown state.
 
-    Args:
-        app: The FastAPI application instance.
-
-    Yields:
-        Control is returned to the application while it runs.
-    """
+    :param app: The FastAPI application instance.
+    :yields: Control is returned to the application while it runs."""
     configure_logging()
     processor = build_question_processor(
         settings.generation_provider,
@@ -91,13 +87,9 @@ async def request_validation_error_handler(
 ) -> JSONResponse:
     """Return a concise explanation for invalid request data.
 
-    Args:
-        request: The request that triggered the validation error.
-        exc: The validation error raised by FastAPI.
-
-    Returns:
-        A JSON response with a human-readable detail message.
-    """
+    :param request: The request that triggered the validation error.
+    :param exc: The validation error raised by FastAPI.
+    :returns: A JSON response with a human-readable detail message."""
     request.state.error_category = "validation"
     issues = []
     for error in exc.errors():
@@ -118,13 +110,9 @@ async def request_validation_error_handler(
 async def internal_error_handler(request: Request, exc: Exception) -> JSONResponse:
     """Return a generic server error without exposing implementation details.
 
-    Args:
-        request: The request that triggered the error.
-        exc: The unhandled exception raised during processing.
-
-    Returns:
-        A JSON response with a generic internal server error detail.
-    """
+    :param request: The request that triggered the error.
+    :param exc: The unhandled exception raised during processing.
+    :returns: A JSON response with a generic internal server error detail."""
     request.state.error_category = "server"
     if isinstance(exc, QuestionProcessingError):
         logger.error(

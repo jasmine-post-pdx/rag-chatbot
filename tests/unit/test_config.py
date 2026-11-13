@@ -36,10 +36,8 @@ def test_postgres_dsn_default_values():
 def test_empty_environment_api_key_fails_settings_validation(monkeypatch, api_key):
     """Reject an empty or whitespace-only API key loaded from the environment.
 
-    Args:
-        monkeypatch: Pytest fixture used to set environment variables.
-        api_key: Invalid empty value to validate.
-    """
+    :param monkeypatch: Pytest fixture used to set environment variables.
+    :param api_key: Invalid empty value to validate."""
     monkeypatch.setenv("OPENAI_API_KEY", api_key)
 
     with pytest.raises(ValidationError, match="OPENAI_API_KEY must not be empty"):
@@ -49,9 +47,7 @@ def test_empty_environment_api_key_fails_settings_validation(monkeypatch, api_ke
 def test_generation_client_settings_use_current_client_defaults(monkeypatch):
     """Keep timeout, retries, output cap, and instructions at today's behavior.
 
-    Args:
-        monkeypatch: Pytest fixture used to clear environment variables.
-    """
+    :param monkeypatch: Pytest fixture used to clear environment variables."""
     for name in (
         "GENERATION_TIMEOUT_SECONDS",
         "GENERATION_MAX_RETRIES",
@@ -71,9 +67,7 @@ def test_generation_client_settings_use_current_client_defaults(monkeypatch):
 def test_generation_client_settings_load_from_environment(monkeypatch):
     """Load generation client overrides from the environment.
 
-    Args:
-        monkeypatch: Pytest fixture used to set environment variables.
-    """
+    :param monkeypatch: Pytest fixture used to set environment variables."""
     monkeypatch.setenv("GENERATION_TIMEOUT_SECONDS", "12.5")
     monkeypatch.setenv("GENERATION_MAX_RETRIES", "4")
     monkeypatch.setenv("GENERATION_MAX_OUTPUT_TOKENS", "256")
@@ -101,12 +95,10 @@ def test_generation_client_settings_reject_invalid_values(
 ):
     """Reject timeouts, retry counts, output caps, and instructions that cannot be used.
 
-    Args:
-        monkeypatch: Pytest fixture used to set environment variables.
-        env_name: Setting environment variable to override.
-        env_value: Invalid value to validate.
-        match: Expected validation message fragment.
-    """
+    :param monkeypatch: Pytest fixture used to set environment variables.
+    :param env_name: Setting environment variable to override.
+    :param env_value: Invalid value to validate.
+    :param match: Expected validation message fragment."""
     monkeypatch.setenv(env_name, env_value)
 
     with pytest.raises(ValidationError, match=match):
@@ -116,9 +108,7 @@ def test_generation_client_settings_reject_invalid_values(
 def test_environment_api_key_is_loaded_as_secret(monkeypatch):
     """Load a non-empty environment API key into a masked secret setting.
 
-    Args:
-        monkeypatch: Pytest fixture used to set environment variables.
-    """
+    :param monkeypatch: Pytest fixture used to set environment variables."""
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
 
     settings = Settings(_env_file=None)
