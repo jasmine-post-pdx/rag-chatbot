@@ -418,3 +418,29 @@ def test_openai_client_caps_backoff_and_omits_the_question_from_retry_logs(caplo
     assert [record.attempt for record in retry_logs] == [1, 2, 3, 4, 5, 6]
     assert {record.provider_status for record in retry_logs} == {503}
     assert {record.exception_type for record in retry_logs} == {"_StatusFailure"}
+
+
+@pytest.mark.parametrize(
+    ("failed_attempt", "jitter", "expected"),
+    [
+        (0, 0.0, 0.25),
+        (0, 1.0, 0.5),
+        (1, 0.0, 0.5),
+        (1, 1.0, 1.0),
+        (4, 0.0, 4.0),
+        (4, 1.0, 8.0),
+        (5, 0.0, 4.0),
+        (5, 1.0, 8.0),
+    ],
+)
+def test_retry_delay_uses_equal_jitter(failed_attempt, jitter, expected):
+    """Equal jitter keeps delays in [ceiling / 2, ceiling], never zero.
+
+    Args:
+        failed_attempt: Zero-based failure count used for the backoff ceiling.
+        jitter: Injected jitter factor from 0 through 1.
+        expected: Delay produced by equal jitter for that attempt and factor.
+    """
+    from app.llm.generation import _retry_delay_seconds
+
+    assert _retry_delay_seconds(failed_attempt, jitter) == expected

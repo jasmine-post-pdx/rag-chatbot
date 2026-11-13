@@ -145,8 +145,8 @@ its own. The application retries HTTP 429, 500, 502, 503, and 504, plus
 timeouts and connection failures. It does not retry authentication failures
 or bad requests. `GENERATION_MAX_RETRIES` (default `2`) is the number of
 extra attempts, so the default cap is three provider calls. The wait before
-each retry is exponential backoff with jitter, starting at half a second and
-capping at eight seconds. Each extra attempt is a new Responses API create.
+each retry is exponential backoff with equal jitter: the wait is between half
+and all of a ceiling that starts at half a second and caps at eight seconds. Each extra attempt is a new Responses API create.
 That call is not idempotent, so a retry can bill another generation when an
 earlier request reached the provider. `input_tokens` and `output_tokens` are
 null when that provider omits usage. The example below shows the local

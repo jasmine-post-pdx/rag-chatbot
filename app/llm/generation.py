@@ -289,19 +289,21 @@ def _is_retryable(exc: Exception) -> bool:
 
 
 def _retry_delay_seconds(failed_attempt: int, jitter: float) -> float:
-    """Return an exponential backoff delay with jitter.
+    """Return an exponential backoff delay with equal jitter.
 
     Args:
         failed_attempt: Zero for the delay after the first failure.
-        jitter: Factor from 0 through 1 applied to the delay ceiling.
+        jitter: Factor from 0 through 1 selecting a point between half the
+            ceiling and the full ceiling.
 
     Returns:
         Seconds to wait before the next attempt. The ceiling doubles from
-        half a second and stops growing at eight seconds.
+        half a second and stops growing at eight seconds. The delay is always
+        in ``[ceiling / 2, ceiling]``.
     """
     bounded_jitter = min(1.0, max(0.0, jitter))
     ceiling = min(_BACKOFF_MAX_SECONDS, _BACKOFF_BASE_SECONDS * (2**failed_attempt))
-    return ceiling * bounded_jitter
+    return ceiling * (0.5 + 0.5 * bounded_jitter)
 
 
 def _reported_token_count(usage: object | None, name: str) -> int | None:
