@@ -42,6 +42,10 @@ sequenceDiagram
         WF-->>API: IdempotencyKeyReuseError
         API-->>MW: 409 Conflict
         MW-->>Client: 409 with x-request-id
+    else Idempotency row is incomplete
+        WF-->>API: IncompleteIdempotencyRecordError
+        API-->>MW: 500 Idempotency-Key record is incomplete
+        MW-->>Client: 500 with x-request-id (no x-question-id)
     else Prior job failed or is incomplete
         WF-->>API: QuestionProcessingError
         API-->>MW: Propagate error
@@ -81,15 +85,18 @@ retrieval counts are zero. No pending state or in-flight idempotency claim is
 stored by this workflow. Simultaneous requests with the same new key may both
 process; the first saved terminal job wins, and a different question for that
 key produces a conflict. A saved failed or incomplete job returns a generic
-500 on retry rather than being processed again. The diagram shows the usual
-non-racing path; in a race, insertion can return the other request's job or a
-key-conflict error instead.
+500 on retry rather than being processed again. An incomplete idempotency-key
+row is handled in the router as `500` with
+`detail: "Idempotency-Key record is incomplete"` and no `x-question-id`. The
+diagram shows the usual non-racing path; in a race, insertion can return the
+other request's job or a key-conflict error instead.
 
 Invalid request data or keys return 422. Other unexpected errors, including
 failure to persist a failed job or an invalid server result, return a generic
-500; `x-question-id` is included for `QuestionProcessingError` only. The
-`x-request-id` response header is the HTTP request ID. `x-question-id` is the
-question ID.
+`{"detail":"Internal server error"}`; `x-question-id` is included for
+`QuestionProcessingError` only. The incomplete-idempotency `500` above is a
+router `HTTPException`, not that generic body. The `x-request-id` response
+header is the HTTP request ID. `x-question-id` is the question ID.
 
 ## Retrieve a question job
 

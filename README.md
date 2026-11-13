@@ -151,22 +151,28 @@ backoff with equal jitter: the wait is between half and all of a ceiling that
 starts at half a second and caps at eight seconds. Each extra attempt is a new
 Responses API create. That call is not idempotent, so a transport retry can
 bill another generation when an earlier request reached the provider; those
-retries are logged with `possible_duplicate_generation`. `input_tokens` and
-`output_tokens` are null when that provider omits usage. The example below
-shows the local placeholder, which reports zero because it does not call a
-model.
+retries set `possible_duplicate_generation` on the warning log record (along
+with `retry_class` and `elapsed_seconds`). The default stdout formatter prints
+only a fixed field list, so those attributes appear in structured log capture
+but not in the one-line request-style output unless that list is extended.
+`input_tokens` and `output_tokens` are null when that provider omits usage. The
+example below shows the local placeholder, which reports zero because it does
+not call a model.
 
 Docker Compose sets `QUESTIONS_DB_PATH` to `/app/data/questions.db` and forwards
-the archive directory, backup directory, live and archive retention, and
+the archive directory, backup directory, live and archive retention, and most
 Postgres settings from the environment, using the same defaults as the
-application. It also forwards `GENERATION_PROVIDER`, `GENERATION_MODEL`,
-`GENERATION_TIMEOUT_SECONDS`, and `GENERATION_MAX_RETRIES`, again using the
-application defaults when those variables are unset. When a `.env` file is
-present, Compose loads it into the app container. That is how
+application. The app service always sets `POSTGRES_HOST=postgres` so it can
+reach the optional Compose Postgres service; that value is not taken from
+`.env` or the host environment. It also forwards `GENERATION_PROVIDER`,
+`GENERATION_MODEL`, `GENERATION_TIMEOUT_SECONDS`, and `GENERATION_MAX_RETRIES`,
+again using the application defaults when those variables are unset. When a
+`.env` file is present, Compose loads it into the app container. That is how
 `OPENAI_API_KEY`, `GENERATION_MAX_OUTPUT_TOKENS`, and `GENERATION_INSTRUCTIONS`
 are forwarded without turning an unset value into an empty string.
-`LOG_LEVEL`, `EMBEDDING_PROVIDER`, and `EMBEDDING_MODEL` are forwarded when
-they are set in that file; otherwise they stay at application defaults.
+`LOG_LEVEL`, `EMBEDDING_PROVIDER`, and `EMBEDDING_MODEL` reach the container
+only when they are set in that `.env` file; otherwise they stay at application
+defaults. Exporting them in the host shell alone does not pass them through.
 
 ### Run with Docker
 
@@ -275,9 +281,11 @@ one terminal result is saved.
 
 The default policy keeps terminal jobs in the live database for 30 days. Their
 idempotency keys are valid for at least that long; because archival runs daily,
-a key can remain valid for up to one extra day. Jobs older than the live window
-move into monthly SQLite archives for another 365 days, then expire. Archived
-jobs are kept for recovery and are not returned by the normal status endpoint.
+a key can remain valid for up to one extra day. After archival deletes a job
+from the live database, that key is no longer honored and can be reused for a
+new submission. Jobs older than the live window move into monthly SQLite
+archives for another 365 days, then expire. Archived jobs are kept for recovery
+and are not returned by the normal status endpoint.
 That is about 13 months in the live database and archives. Existing rows get a
 `created_at` timestamp on the first upgraded app startup, so their retention
 period starts at that migration time.
@@ -370,7 +378,8 @@ also includes an `x-question-id` header. That header is the `question_id`. Use
 it to poll `GET /v1/questions/{question_id}`; the job response reports
 `status: "failed"`
 and `error_category: "processing_error"` without exposing provider exception
-details.
+details. A corrupted or incomplete idempotency-key row returns `500` with
+`detail: "Idempotency-Key record is incomplete"` and no `x-question-id`.
 
 The middleware owns one request summary; API exception handlers own handled
 error records. Error records include the request ID, category, exception type,

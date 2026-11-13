@@ -26,7 +26,7 @@ client
 | `app/services/question_processor.py` | Processor port, placeholder and LLM implementations, and provider selection. |
 | `app/stores/` | `QuestionJobStore` protocol and SQLite-backed implementation. |
 | `scripts/question_job_maintenance.py` | SQLite snapshots, tiered backup rotation, and terminal-job archiving. |
-| `app/domain/` | Internal job and answer DTOs, plus domain errors such as idempotency-key reuse. |
+| `app/domain/` | Internal job and answer DTOs, plus domain errors such as idempotency-key reuse, incomplete idempotency records, and invalid keys. |
 | `app/schemas/` | Independent public question, health, and error schemas, including safe processing failure categories. |
 | `app/llm/` | Generation interfaces, local fake, and OpenAI Responses adapter. |
 | `app/retrieval/`, `app/tools/` | Package placeholders; no retrieval or tool behavior is implemented yet. |
@@ -41,10 +41,13 @@ not stored. The HTTP request ID is passed independently to the processor.
 Processing failures are persisted as failed jobs with a safe error category; the
 submit request still returns a generic server error. API handlers map service
 results and their nested metadata to public schemas. The store serializes jobs as
-JSON in SQLite, preserves older two-column job tables when adding maintenance and
-idempotency metadata, and checks readiness with
+JSON in SQLite, migrates legacy schemas (for example older `question_id` +
+`job_json` tables and renamed `request_id` columns) when adding maintenance and
+idempotency metadata, and may rebuild the table to enforce the paired
+idempotency CHECK. Readiness uses
 `SELECT question_id FROM question_jobs LIMIT 1`. The optional Compose pgvector
-service is not connected to the application.
+service is not connected to the application; when that profile is used, the app
+container still sets `POSTGRES_HOST=postgres` for the future vector-store path.
 The maintenance command keeps 30 days of jobs live, archives older terminal
 jobs, and expires archived rows after the configured archive period.
 

@@ -114,7 +114,8 @@ class OpenAIResponsesClient:
     Authentication failures and bad requests are not retried.
     ``responses.create`` is not idempotent, so a transport retry can bill a
     second generation when an earlier request reached the provider; those
-    retries are logged with ``possible_duplicate_generation``.
+    retries attach ``possible_duplicate_generation`` to the warning log
+    record (with ``retry_class`` and ``elapsed_seconds``).
 
     Attributes:
         _client: SDK client used to make Responses API requests, if created.

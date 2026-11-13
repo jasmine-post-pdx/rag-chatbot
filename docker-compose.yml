@@ -5,9 +5,11 @@ services:
     ports:
       - "8000:8000"
     env_file:
-      # Forwards OPENAI_API_KEY, GENERATION_MAX_OUTPUT_TOKENS, and
-      # GENERATION_INSTRUCTIONS when the file defines them. Omitted so an
-      # unset key is not passed as an empty string, which settings reject.
+      # Forwards OPENAI_API_KEY, GENERATION_MAX_OUTPUT_TOKENS,
+      # GENERATION_INSTRUCTIONS, LOG_LEVEL, EMBEDDING_PROVIDER, and
+      # EMBEDDING_MODEL when the file defines them. Omitted so an unset key
+      # is not passed as an empty string, which settings reject. Host-shell
+      # exports alone do not supply those env_file-only values.
       - path: .env
         required: false
     environment:
@@ -16,6 +18,7 @@ services:
       QUESTIONS_BACKUP_DIR: ${QUESTIONS_BACKUP_DIR:-data/question_backups}
       QUESTIONS_LIVE_RETENTION_DAYS: ${QUESTIONS_LIVE_RETENTION_DAYS:-30}
       QUESTIONS_ARCHIVE_RETENTION_DAYS: ${QUESTIONS_ARCHIVE_RETENTION_DAYS:-365}
+      # Always the Compose service hostname; not taken from .env/POSTGRES_HOST.
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_USER: ${POSTGRES_USER:-raglab}
