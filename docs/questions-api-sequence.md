@@ -27,55 +27,143 @@ sequenceDiagram
     Client->>MW: POST /v1/questions (question, optional Idempotency-Key)
     MW->>MW: Create/normalize x-request-id
     MW->>API: Forward request
-    API->>Dep: get_question_workflow(request)
-    Dep-->>API: Shared workflow from app state
-    API->>API: Validate question and idempotency key
-    API->>WF: submit_question(question, request ID, key)
-    WF->>WF: Generate question ID
-    opt Idempotency key supplied
-        WF->>Store: Look up hashed key
-        Store-->>WF: Existing job and fingerprint, or none
-    end
-    alt Matching completed job exists
-        WF-->>API: Saved result
-    else Key belongs to a different question
-        WF-->>API: IdempotencyKeyReuseError
-        API-->>MW: 409 Conflict
-        MW-->>Client: 409 with x-request-id
-    else Idempotency row is incomplete
-        WF-->>API: IncompleteIdempotencyRecordError
-        API-->>MW: 500 Idempotency-Key record is incomplete
-        MW-->>Client: 500 with x-request-id (no x-question-id)
-    else Prior job failed or is incomplete
-        WF-->>API: QuestionProcessingError
-        API-->>MW: Propagate error
-        MW-->>Err: Propagate error
-        Err-->>Client: Generic 500 with x-request-id and x-question-id
-    else No saved job for the key
-        WF->>Processor: process(question ID, question, request ID)
-        opt OpenAI provider configured
-            Processor->>LLM: generate(question)
-            LLM-->>Processor: Answer and model usage, or error
+
+    alt Request body or header fails FastAPI/Pydantic validation
+        API-->>MW: Propagate RequestValidationError
+        MW-->>Err: Propagate RequestValidationError
+        Err-->>Client: 422 with detail and x-request-id
+    else Blank Idempotency-Key after strip
+        API-->>MW: 422 Idempotency-Key must not be blank
+        MW-->>Client: 422 with x-request-id
+    else Request is structurally valid
+        API->>Dep: get_question_workflow(request)
+        Dep-->>API: Shared workflow from app state
+        API->>WF: submit_question(question, request ID, key)
+        WF->>WF: Generate question ID
+
+        opt Idempotency key supplied
+            alt Key blank or longer than 255 after workflow strip
+                WF-->>API: InvalidIdempotencyKeyError
+                API-->>MW: 422 Idempotency-Key must contain 1 to 255 characters
+                MW-->>Client: 422 with x-request-id
+            else Key is within length limits
+                WF->>Store: Look up hashed key
+                alt Stored idempotency row is incomplete
+                    Store-->>WF: IncompleteIdempotencyRecordError
+                    WF-->>API: IncompleteIdempotencyRecordError
+                    API-->>MW: 500 Idempotency-Key record is incomplete
+                    MW-->>Client: 500 with x-request-id (no x-question-id)
+                else Existing job found
+                    Store-->>WF: Existing job and fingerprint
+                    alt Fingerprint belongs to a different question
+                        WF-->>API: IdempotencyKeyReuseError
+                        API-->>MW: 409 Conflict
+                        MW-->>Client: 409 with x-request-id
+                    else Matching completed job
+                        WF-->>API: Saved result
+                    else Matching failed or incomplete job
+                        WF-->>API: QuestionProcessingError
+                        API-->>MW: Propagate error
+                        MW-->>Err: Propagate error
+                        Err-->>Client: Generic 500 with x-request-id and x-question-id
+                    end
+                else No row for the key
+                    Store-->>WF: None
+                end
+            end
         end
-        alt Processing succeeds
-            Processor-->>WF: Result DTO
-            WF->>Store: Insert completed job
-            Store-->>WF: Persisted terminal job
-            WF-->>API: Result DTO
-        else Processing fails
-            Processor-->>WF: Processing error
-            WF->>Store: Insert failed job (processing_error)
-            Store-->>WF: Persisted terminal job
-            WF-->>API: QuestionProcessingError
-            API-->>MW: Propagate error
-            MW-->>Err: Propagate error
-            Err-->>Client: Generic 500 with x-request-id and x-question-id
+
+        alt Workflow already returned a saved completed result
+            API->>API: Map DTO to public response schema
+            API-->>MW: 200 QuestionResultResponse
+            MW-->>Client: 200 with x-request-id
+        else Workflow already returned an HTTP error above
+            Note over Client,LLM: Request finished in an earlier branch
+        else No reusable terminal job
+            WF->>Processor: process(question ID, question, request ID)
+            opt OpenAI provider configured
+                Processor->>LLM: generate(question)
+                LLM-->>Processor: Answer and model usage, or error
+            end
+
+            alt Processing succeeds
+                Processor-->>WF: Result DTO
+                WF->>Store: Insert completed job
+                alt Insert persists this request's completed job
+                    Store-->>WF: Persisted terminal job
+                    WF-->>API: Result DTO
+                    API->>API: Map DTO to public response schema
+                    API-->>MW: 200 QuestionResultResponse
+                    MW-->>Client: 200 with x-request-id
+                else Race returns another request's completed job
+                    Store-->>WF: Other request's completed job
+                    WF-->>API: Other request's saved result
+                    API->>API: Map DTO to public response schema
+                    API-->>MW: 200 QuestionResultResponse
+                    MW-->>Client: 200 with x-request-id
+                else Race returns another request's failed or incomplete job
+                    Store-->>WF: Other request's failed or incomplete job
+                    WF-->>API: QuestionProcessingError
+                    API-->>MW: Propagate error
+                    MW-->>Err: Propagate error
+                    Err-->>Client: Generic 500 with x-request-id and x-question-id
+                else Insert hits a different-question key conflict
+                    Store-->>WF: IdempotencyKeyReuseError
+                    WF-->>API: IdempotencyKeyReuseError
+                    API-->>MW: 409 Conflict
+                    MW-->>Client: 409 with x-request-id
+                else Insert finds an incomplete idempotency row
+                    Store-->>WF: IncompleteIdempotencyRecordError
+                    WF-->>API: IncompleteIdempotencyRecordError
+                    API-->>MW: 500 Idempotency-Key record is incomplete
+                    MW-->>Client: 500 with x-request-id (no x-question-id)
+                else Insert fails for another reason
+                    Store-->>WF: Persistence error
+                    WF-->>API: QuestionStatePersistenceError
+                    API-->>MW: Propagate error
+                    MW-->>Err: Propagate error
+                    Err-->>Client: Generic 500 with x-request-id (no x-question-id)
+                end
+            else Processing fails
+                Processor-->>WF: Processing error
+                WF->>Store: Insert failed job (processing_error)
+                alt Insert persists this request's failed job
+                    Store-->>WF: Persisted terminal job
+                    WF-->>API: QuestionProcessingError
+                    API-->>MW: Propagate error
+                    MW-->>Err: Propagate error
+                    Err-->>Client: Generic 500 with x-request-id and x-question-id
+                else Race returns another request's completed job
+                    Store-->>WF: Other request's completed job
+                    WF-->>API: Other request's saved result
+                    API->>API: Map DTO to public response schema
+                    API-->>MW: 200 QuestionResultResponse
+                    MW-->>Client: 200 with x-request-id
+                else Race returns another request's failed or incomplete job
+                    Store-->>WF: Other request's failed or incomplete job
+                    WF-->>API: QuestionProcessingError
+                    API-->>MW: Propagate error
+                    MW-->>Err: Propagate error
+                    Err-->>Client: Generic 500 with x-request-id and x-question-id
+                else Insert hits a different-question key conflict
+                    Store-->>WF: IdempotencyKeyReuseError
+                    WF-->>API: IdempotencyKeyReuseError
+                    API-->>MW: 409 Conflict
+                    MW-->>Client: 409 with x-request-id
+                else Insert finds an incomplete idempotency row
+                    Store-->>WF: IncompleteIdempotencyRecordError
+                    WF-->>API: IncompleteIdempotencyRecordError
+                    API-->>MW: 500 Idempotency-Key record is incomplete
+                    MW-->>Client: 500 with x-request-id (no x-question-id)
+                else Insert fails for another reason
+                    Store-->>WF: Persistence error
+                    WF-->>API: QuestionStatePersistenceError
+                    API-->>MW: Propagate error
+                    MW-->>Err: Propagate error
+                    Err-->>Client: Generic 500 with x-request-id (no x-question-id)
+                end
+            end
         end
-    end
-    opt A result was returned
-        API->>API: Map DTO to public response schema
-        API-->>MW: 200 QuestionResultResponse
-        MW-->>Client: 200 with x-request-id
     end
 ```
 
@@ -83,20 +171,24 @@ The configured local processor returns a placeholder; the OpenAI processor
 uses the Responses API. Neither performs retrieval: citations are empty and
 retrieval counts are zero. No pending state or in-flight idempotency claim is
 stored by this workflow. Simultaneous requests with the same new key may both
-process; the first saved terminal job wins, and a different question for that
-key produces a conflict. A saved failed or incomplete job returns a generic
-500 on retry rather than being processed again. An incomplete idempotency-key
-row is handled in the router as `500` with
-`detail: "Idempotency-Key record is incomplete"` and no `x-question-id`. The
-diagram shows the usual non-racing path; in a race, insertion can return the
-other request's job or a key-conflict error instead.
+process; the first saved terminal job wins. A race can return the other
+request's completed result as `200`, raise `409` when the fingerprints differ,
+surface an incomplete-key `500`, or replay a prior failure as a generic `500`
+with `x-question-id`.
 
-Invalid request data or keys return 422. Other unexpected errors, including
-failure to persist a failed job or an invalid server result, return a generic
-`{"detail":"Internal server error"}`; `x-question-id` is included for
-`QuestionProcessingError` only. The incomplete-idempotency `500` above is a
-router `HTTPException`, not that generic body. The `x-request-id` response
-header is the HTTP request ID. `x-question-id` is the question ID.
+Response summary:
+
+| Outcome | Status | `detail` / body | `x-question-id` |
+| --- | --- | --- | --- |
+| Completed answer | `200` | `QuestionResultResponse` | no |
+| Invalid body or blank/oversized key | `422` | validation or key message | no |
+| Idempotency key reused for a different question | `409` | conflict message | no |
+| Incomplete idempotency row | `500` | `Idempotency-Key record is incomplete` | no |
+| Processing failure after the failed job is saved | `500` | `Internal server error` | yes |
+| Persistence failure or other unexpected server error | `500` | `Internal server error` | no |
+
+`x-request-id` is returned on every response. `x-question-id` is set only for
+`QuestionProcessingError`.
 
 ## Retrieve a question job
 
@@ -121,6 +213,7 @@ sequenceDiagram
     alt Job exists
         API->>API: Map job and any result to public schemas
         API-->>MW: 200 QuestionJobResponse
+        Note over API,MW: completed includes result; failed includes error_category=processing_error; legacy pending has neither
     else Job not found
         API-->>MW: 404 Question not found
     end
