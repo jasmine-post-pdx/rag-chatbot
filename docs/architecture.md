@@ -13,6 +13,7 @@ client
     -> question routes -> await `QuestionWorkflow` (`app/services/question_workflow.py`)
       -> await to_thread(`QuestionJobStore`) for an idempotency lookup, when a key is present
       -> await `QuestionProcessor` (`app/services/question_processor.py`)
+        -> `allocate_context_budget` (`app/services/token_budget.py`) before generate
       -> await to_thread(`QuestionJobStore`) to persist the terminal job
         -> `SQLiteQuestionJobStore` (`app/stores/sqlite.py`)
     -> readiness -> await to_thread(`QuestionJobStore.is_ready()`)
@@ -25,9 +26,10 @@ client
 | `app/config/` | Environment-based settings and standard-library logging configuration. |
 | `app/services/question_workflow.py` | Generates job IDs, coordinates answer processing, idempotency, and success or failure persistence. |
 | `app/services/question_processor.py` | Processor port, placeholder and LLM implementations, and provider selection. |
+| `app/services/token_budget.py` | Token counters and deterministic context-budget allocation before generation. |
 | `app/stores/` | `QuestionJobStore` protocol and SQLite-backed implementation. |
 | `scripts/question_job_maintenance.py` | SQLite snapshots, tiered backup rotation, and terminal-job archiving. |
-| `app/domain/` | Internal job and answer DTOs, plus domain errors such as idempotency-key reuse, incomplete idempotency records, and invalid keys. |
+| `app/domain/` | Internal job, answer, and context-budget DTOs, plus domain errors such as idempotency-key reuse, incomplete idempotency records, invalid keys, and context-budget overflow. |
 | `app/schemas/` | Independent public question, health, and error schemas, including safe processing failure categories. |
 | `app/llm/` | Async generation interfaces, local fake, and OpenAI Responses adapter. |
 | `app/retrieval/`, `app/tools/` | Package placeholders; no retrieval or tool behavior is implemented yet. |
@@ -46,6 +48,14 @@ not stored. Async generation alone does not add a durable background worker, and
 not impose application concurrency limits by itself. Per-attempt generation
 timeouts plus retries can make total latency longer than one timeout.
 The HTTP request ID is passed independently to the processor.
+Before generation, processors allocate a context budget: the model context
+window minus instructions, question, history, tool schemas, request framing,
+the output-token reserve, and a safety margin. OpenAI-oriented models use
+tiktoken; the local path uses a character-based estimate and labels results as
+estimates. Ranked chunks are selected greedily in order; chunks that do not fit
+are skipped. If fixed input alone exceeds the window, processing fails closed
+without calling the provider. Live requests still supply an empty chunk list
+because retrieval is not wired yet. Budget logs omit prompt and chunk text.
 Processing failures are persisted as failed jobs with a safe error category; the
 submit request still returns a generic server error. API handlers map service
 results and their nested metadata to public schemas. The store serializes jobs as
@@ -67,7 +77,7 @@ or an ingestion pipeline.
 
 | Path | Current contents |
 | --- | --- |
-| `tests/unit/` | Configuration, logging, SQLite job storage, question processors, async generation adapters, and event-loop isolation. |
+| `tests/unit/` | Configuration, logging, SQLite job storage, question processors, token/context budgeting, async generation adapters, and event-loop isolation. |
 | `tests/integration/` | HTTP API behavior, OpenAPI and schema contracts, lifespan, request logging, generation wiring, and an opt-in OpenAI smoke test. |
 | `tests/evals/` | Placeholder package; no retrieval or answer-quality evaluations exist yet. |
 
@@ -82,8 +92,10 @@ client -> API -> service/orchestrator -> retrieval -> model generation -> answer
                                       \-> optional tools
 ```
 
-- Add ingestion, chunking, embeddings, search, ranking, and context assembly
-  under `app/retrieval/` and additional model adapters under `app/llm/`.
+- Add ingestion, chunking, embeddings, search, and ranking under
+  `app/retrieval/` and additional model adapters under `app/llm/`. Context
+  budgeting already lives in `app/services/token_budget.py` and will consume
+  ranked chunks once retrieval exists.
 - Connect the optional Postgres/pgvector service for document chunks and
   embeddings; keep SQLite focused on question-job state unless that boundary
   changes deliberately.
