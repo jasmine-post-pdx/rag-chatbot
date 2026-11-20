@@ -24,12 +24,13 @@ generation can change independently. Request flow today is:
 
 ```text
 client
-  -> FastAPI routes (`app/routers/`) and request middleware (`app/middleware.py`)
-    -> question routes -> `QuestionWorkflow` (`app/services/question_workflow.py`)
-      -> `QuestionProcessor` (`app/services/question_processor.py`)
-      -> `QuestionJobStore` (`app/stores/question_job_store.py`)
+  -> async FastAPI routes (`app/routers/`) and request middleware (`app/middleware.py`)
+    -> question routes -> await `QuestionWorkflow` (`app/services/question_workflow.py`)
+      -> await to_thread(`QuestionJobStore`) for an idempotency lookup, when a key is present
+      -> await `QuestionProcessor` (`app/services/question_processor.py`)
+      -> await to_thread(`QuestionJobStore`) to persist the terminal job
         -> `SQLiteQuestionJobStore` (`app/stores/sqlite.py`)
-    -> readiness -> `QuestionJobStore.is_ready()`
+    -> readiness -> await to_thread(`QuestionJobStore.is_ready()`)
 ```
 
 | Path | Role |
@@ -43,7 +44,7 @@ client
 | `app/config/` | Environment-based settings and logging configuration. |
 | `app/services/` | Question workflow (IDs, idempotency, persistence) and answer processors. |
 | `app/stores/` | `QuestionJobStore` protocol and SQLite implementation. |
-| `app/llm/` | Provider-neutral generation interfaces, OpenAI Responses adapter, and a fake client. |
+| `app/llm/` | Provider-neutral async generation interfaces, OpenAI Responses adapter, and a fake client. |
 | `app/retrieval/` | Placeholder for chunking, indexing, search, ranking, and context assembly. |
 | `app/tools/` | Placeholder for optional tools the generator can call. |
 | `scripts/` | Maintenance commands for SQLite backups, archives, and restore checks. |
@@ -126,15 +127,21 @@ Local runs load all of these settings from environment variables or `.env`.
 To use the local placeholder instead of OpenAI, set `GENERATION_PROVIDER=local`
 or leave it unset.
 
+Generation uses an async OpenAI Responses client (`AsyncOpenAI`). When
+`GENERATION_PROVIDER=openai` and `OPENAI_API_KEY` is set, the FastAPI lifespan
+creates a shared SDK client, injects it into the processor, and closes it on
+shutdown. Callers await `generate`; retry backoff uses non-blocking sleep so
+the event loop can continue other work during waits.
+
 The OpenAI client timeout is `GENERATION_TIMEOUT_SECONDS` (default `30`).
-That limit applies to each attempt. Retries can make the total wait longer
-than one timeout. `GENERATION_MAX_OUTPUT_TOKENS`, when set, is sent as
-`max_output_tokens` and caps completion tokens. Leave it unset to omit the
+That limit applies to each attempt. Retries and backoff can make the total
+wait longer than one timeout. `GENERATION_MAX_OUTPUT_TOKENS` defaults to
+`1024` and is always sent as `max_output_tokens`. Override it to change the
 cap. `GENERATION_INSTRUCTIONS`, when set, is sent separately from the
 question. Leave it unset to send no extra instructions.
 
-The SDK client is created with `max_retries=0`, so the SDK does not retry on
-its own. The application retries HTTP 429, 500, 502, 503, and 504 up to
+The shared async SDK client is created with `max_retries=0`, so the SDK does
+not retry on its own. The application retries HTTP 429, 500, 502, 503, and 504 up to
 `GENERATION_MAX_RETRIES` (default `2`) extra attempts. Timeouts and connection
 failures are retried at most once, even when that setting is higher, and no
 retry starts after a 60-second wall-clock budget. Authentication failures and
@@ -408,10 +415,17 @@ the SQLite store until the retrieval layer is wired up.
   no citations.
 - Only the question-job endpoints are functional; there is no document ingestion
   or search endpoint.
-- `POST /v1/questions` is synchronous: it processes the question, persists the
-  completed or failed job, and returns in one request. In-flight work is not
-  persisted; the status endpoint retrieves terminal job records after submission
-  finishes. Real RAG work will likely be asynchronous.
+- `POST /v1/questions` still finishes in one request: it awaits generation,
+  persists the completed or failed job, and returns. SQLite work is offloaded
+  off the event loop. In-flight work is not persisted; the status endpoint
+  retrieves terminal job records after submission finishes. A durable worker
+  that survives disconnects or restarts is a future option, not part of this
+  async conversion.
+- Making generation async does not by itself impose application concurrency
+  limits. Uvicorn worker count, OS resources, and provider rate limits still
+  govern how much work runs at once. Per-attempt `GENERATION_TIMEOUT_SECONDS`
+  plus retries and backoff can make total request latency longer than one
+  timeout.
 - The SQLite database path defaults to `data/questions.db` and can be changed
   with the `QUESTIONS_DB_PATH` environment variable or in a `.env` file.
 - Postgres is optional and is not required to run the current API. Start it with
@@ -453,7 +467,8 @@ ruff check app tests
 
 The integration tests exercise the HTTP API through a dependency override
 backed by an in-memory SQLite store. Unit tests cover configuration, logging,
-job storage, the placeholder and LLM processors, and the generation adapters.
+job storage, the placeholder and LLM processors, the async generation adapters,
+and event-loop isolation when SQLite or generation is blocked or cancelled.
 `tests/evals/` is still a placeholder for retrieval and answer-quality tests.
 
 ## What's next
@@ -470,8 +485,10 @@ projects.
 - [ ] Add retrieval-quality evaluations under `tests/evals/`.
 - [x] Move database path and model settings into configuration or environment
       variables.
-- [ ] Make question processing asynchronous with a real pending/completed
-      lifecycle.
+- [x] Await generation asynchronously and offload blocking SQLite work from the
+      event loop (Step 2.5).
+- [ ] Make question jobs durable across disconnects or restarts with a real
+      pending/completed worker lifecycle when latency requires it.
 
 ## License
 

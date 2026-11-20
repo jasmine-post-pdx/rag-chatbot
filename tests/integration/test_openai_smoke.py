@@ -8,8 +8,9 @@ from app.llm.generation import OpenAIResponsesClient
 
 
 @pytest.mark.openai_smoke
-def test_openai_responses_api_smoke():
-    """Verify a real Responses API call returns answer and usage metadata.
+@pytest.mark.asyncio
+async def test_openai_responses_api_smoke():
+    """Verify a real async Responses API call returns answer and usage metadata.
 
     Set ``RUN_OPENAI_SMOKE=1``, ``OPENAI_API_KEY``, and
     ``OPENAI_SMOKE_MODEL`` to opt in. The key and model can be set in the shell
@@ -41,7 +42,7 @@ def test_openai_responses_api_smoke():
         instructions=settings.generation_instructions,
         max_retries=settings.generation_max_retries,
     )
-    result = client.generate("Reply with a short greeting.")
+    result = await client.generate("Reply with a short greeting.")
 
     assert result.answer.strip()
     assert result.provider == "openai"

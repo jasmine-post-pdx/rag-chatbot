@@ -73,7 +73,7 @@ def to_question_result_response(result: QuestionResult) -> QuestionResultRespons
         }
     },
 )
-def create_question(
+async def create_question(
     body: QuestionCreate,
     http_request: Request,
     question_workflow: QuestionWorkflowDep,
@@ -98,7 +98,7 @@ def create_question(
             )
 
     try:
-        result = question_workflow.submit_question(
+        result = await question_workflow.submit_question(
             body.question,
             request_id=http_request.state.request_id,
             idempotency_key=idempotency_key,
@@ -122,7 +122,7 @@ def create_question(
 
 
 @router.get("/{question_id}", response_model=QuestionJobResponse)
-def get_question(
+async def get_question(
     question_id: str,
     question_workflow: QuestionWorkflowDep,
 ) -> QuestionJobResponse:
@@ -132,7 +132,7 @@ def get_question(
     :param question_workflow: The workflow used to look up the job.
     :returns: The current job state, its result on success, or a safe error category.
     :raises HTTPException: If no job exists for the given identifier."""
-    job = question_workflow.get_job(question_id)
+    job = await question_workflow.get_job(question_id)
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question not found")
     return QuestionJobResponse(

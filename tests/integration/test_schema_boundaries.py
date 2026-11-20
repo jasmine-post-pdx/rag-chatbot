@@ -33,7 +33,7 @@ def test_submit_and_poll_map_nested_results(client, store_factory):
     from app.domain.questions import Citation, ModelMetrics, QuestionResult, RetrievalMetrics
 
     class Processor:
-        def process(self, question_id, question, *, request_id=None):
+        async def process(self, question_id, question, *, request_id=None):
             return QuestionResult(
                 question_id=question_id,
                 answer="Answer",
@@ -108,10 +108,10 @@ def test_malformed_nested_dto_returns_generic_500(client, store_factory, endpoin
                 model=ModelMetrics(provider="test", name="model", input_tokens=0, output_tokens=0),
             )
 
-        def submit_question(self, question, *, request_id=None, idempotency_key=None):
+        async def submit_question(self, question, *, request_id=None, idempotency_key=None):
             return self.result()
 
-        def get_job(self, question_id):
+        async def get_job(self, question_id):
             return QuestionJob(question_id=question_id, status="completed", result=self.result())
 
     workflow = BadWorkflow(store_factory())
@@ -135,7 +135,7 @@ def test_mapping_shaped_workflow_result_is_validated(client, store_factory):
     }
 
     class MappingWorkflow(QuestionWorkflow):
-        def submit_question(self, question, *, request_id=None, idempotency_key=None):
+        async def submit_question(self, question, *, request_id=None, idempotency_key=None):
             return result
 
     workflow = MappingWorkflow(store_factory())

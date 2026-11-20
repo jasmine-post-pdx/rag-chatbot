@@ -9,12 +9,13 @@ local placeholder or the configured OpenAI provider.
 
 ```text
 client
-  -> FastAPI routes (`app/routers/`) and request middleware (`app/middleware.py`)
-    -> question routes -> `QuestionWorkflow` (`app/services/question_workflow.py`)
-      -> `QuestionProcessor` (`app/services/question_processor.py`)
-      -> `QuestionJobStore` (`app/stores/question_job_store.py`)
+  -> async FastAPI routes (`app/routers/`) and request middleware (`app/middleware.py`)
+    -> question routes -> await `QuestionWorkflow` (`app/services/question_workflow.py`)
+      -> await to_thread(`QuestionJobStore`) for an idempotency lookup, when a key is present
+      -> await `QuestionProcessor` (`app/services/question_processor.py`)
+      -> await to_thread(`QuestionJobStore`) to persist the terminal job
         -> `SQLiteQuestionJobStore` (`app/stores/sqlite.py`)
-    -> readiness -> `QuestionJobStore.is_ready()`
+    -> readiness -> await to_thread(`QuestionJobStore.is_ready()`)
 ```
 
 | Area | Current responsibility |
@@ -28,16 +29,23 @@ client
 | `scripts/question_job_maintenance.py` | SQLite snapshots, tiered backup rotation, and terminal-job archiving. |
 | `app/domain/` | Internal job and answer DTOs, plus domain errors such as idempotency-key reuse, incomplete idempotency records, and invalid keys. |
 | `app/schemas/` | Independent public question, health, and error schemas, including safe processing failure categories. |
-| `app/llm/` | Generation interfaces, local fake, and OpenAI Responses adapter. |
+| `app/llm/` | Async generation interfaces, local fake, and OpenAI Responses adapter. |
 | `app/retrieval/`, `app/tools/` | Package placeholders; no retrieval or tool behavior is implemented yet. |
 
 The FastAPI application lifespan creates, verifies, and owns the SQLite store,
-injects it into the workflow, and closes it on shutdown or failed startup after
-creation. Question routes receive the workflow through dependency injection, and the
-readiness route checks the same store directly. Question submission assigns a job
+and when OpenAI generation is configured with an API key it also owns a shared
+async OpenAI SDK client. Both are injected into the workflow path and closed on
+shutdown or failed startup after creation. Question routes receive the workflow through dependency injection, and the
+readiness route checks the same store directly. `QuestionWorkflow` awaits the
+async processor and offloads each discrete SQLite call with `asyncio.to_thread`,
+so blocking DB I/O does not run on the event loop and no store lock is held
+across a provider await. Question submission assigns a job
 ID, checks any idempotency key, processes the question,
 then persists and returns its terminal result in one request; in-flight work is
-not stored. The HTTP request ID is passed independently to the processor.
+not stored. Async generation alone does not add a durable background worker, and it does
+not impose application concurrency limits by itself. Per-attempt generation
+timeouts plus retries can make total latency longer than one timeout.
+The HTTP request ID is passed independently to the processor.
 Processing failures are persisted as failed jobs with a safe error category; the
 submit request still returns a generic server error. API handlers map service
 results and their nested metadata to public schemas. The store serializes jobs as
@@ -59,7 +67,7 @@ or an ingestion pipeline.
 
 | Path | Current contents |
 | --- | --- |
-| `tests/unit/` | Configuration, logging, SQLite job storage, question processors, and generation adapters. |
+| `tests/unit/` | Configuration, logging, SQLite job storage, question processors, async generation adapters, and event-loop isolation. |
 | `tests/integration/` | HTTP API behavior, OpenAPI and schema contracts, lifespan, request logging, generation wiring, and an opt-in OpenAI smoke test. |
 | `tests/evals/` | Placeholder package; no retrieval or answer-quality evaluations exist yet. |
 

@@ -9,6 +9,33 @@ next steps as they stood at the time, not necessarily the current state.
 
 ---
 
+## 2026-11-13 — Awaited generation and kept SQLite off the event loop
+
+**What I figured out**
+Step 2.5 made `LLMClient.generate` async with `AsyncOpenAI`, owned the shared
+client in FastAPI lifespan, and awaited generation through the processor,
+workflow, and routes. The SQLite store stayed synchronous; each workflow store
+call runs in `asyncio.to_thread` and finishes before the provider await, so a
+database lock is never held across generation. Injected processors use
+`is not None` instead of truthiness. Cancelling a submit task during generate
+leaves no terminal job and does not wedge the store for later requests.
+
+**Why it matters**
+The public question contract stays the same while the event loop can keep
+serving health checks and other work during provider waits or blocked DB I/O.
+Async alone is not a concurrency limit and is not a durable worker for jobs that
+must survive disconnects.
+
+**Still fuzzy**
+- Whether real RAG latency will force a durable pending/completed worker
+- How cancellation should interact with non-idempotent provider retries in
+  production traffic
+
+**Next**
+Step 3 token and context budgeting before retrieval is wired into answers.
+
+---
+
 ## 2026-11-10 — Organized the API by responsibility
 
 **What I figured out**

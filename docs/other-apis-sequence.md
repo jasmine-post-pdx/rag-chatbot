@@ -19,7 +19,7 @@ Client          Middleware       FastAPI route       SQLite store       SQLite d
   |                |                 |                 |                |
   | GET /ready     |                 |                 |                |
   |--------------->|---------------->|                 |                |
-  |                |                 | is_ready()      |                |
+  |                |                 | await to_thread(is_ready) |      |
   |                |                 |---------------->|                |
   |                |                 |                 | SELECT question_id FROM question_jobs LIMIT 1
   |                |                 |                 |--------------->|
@@ -51,7 +51,7 @@ sequenceDiagram
     MW->>API: Forward request
     API->>Dep: get_question_job_store(request)
     Dep-->>API: Shared store from app state
-    API->>Store: is_ready()
+    API->>Store: await to_thread(is_ready)
     Store->>DB: SELECT question_id FROM question_jobs LIMIT 1
     DB-->>Store: Row or empty result
 

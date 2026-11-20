@@ -1,6 +1,7 @@
 """Application lifespan ownership of the question job store."""
 
 import sqlite3
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -23,13 +24,58 @@ def test_lifespan_shares_and_closes_store(monkeypatch):
         workflow = main.app.state.question_workflow
         assert workflow._store is stores[0]
         assert main.app.state.question_job_store is stores[0]
+        assert main.app.state.generation_client is None
         assert client.get("/ready").json() == {"status": "ready"}
         submitted = client.post("/v1/questions", json={"question": "Hello"}).json()
         assert stores[0].get_job(submitted["question_id"]).result.answer == submitted["answer"]
 
     assert main.app.state.question_workflow is None
     assert main.app.state.question_job_store is None
+    assert main.app.state.generation_client is None
     assert stores[0].is_ready() is False
+
+
+def test_lifespan_closes_shared_openai_client(monkeypatch, tmp_path):
+    """Create and close a shared AsyncOpenAI client when OpenAI is configured."""
+    import openai as openai_module
+
+    closed = []
+
+    class RecordingAsyncOpenAI:
+        """Record close calls for the lifespan-owned generation client."""
+
+        def __init__(self, **kwargs):
+            """Store construction kwargs for assertions.
+
+            :param **kwargs: Arguments passed by the lifespan factory."""
+            self.kwargs = kwargs
+
+        async def close(self) -> None:
+            """Mark the shared client as closed."""
+            closed.append(True)
+
+    monkeypatch.setattr(main.settings, "questions_db_path", str(tmp_path / "q.db"))
+    monkeypatch.setattr(main.settings, "generation_provider", "openai")
+    monkeypatch.setattr(main.settings, "generation_model", "gpt-test")
+    monkeypatch.setattr(
+        main.settings,
+        "openai_api_key",
+        SimpleNamespace(get_secret_value=lambda: "test-key"),
+    )
+    monkeypatch.setattr(openai_module, "AsyncOpenAI", RecordingAsyncOpenAI)
+
+    with TestClient(main.app) as client:
+        shared = main.app.state.generation_client
+        assert isinstance(shared, RecordingAsyncOpenAI)
+        assert shared.kwargs == {
+            "api_key": "test-key",
+            "timeout": main.settings.generation_timeout_seconds,
+            "max_retries": 0,
+        }
+        assert client.get("/ready").status_code == 200
+
+    assert closed == [True]
+    assert main.app.state.generation_client is None
 
 
 @pytest.mark.parametrize(

@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 class QuestionProcessor(Protocol):
     """Produces an answer result for a question."""
 
-    def process(
+    async def process(
         self,
         question_id: str,
         question: str,
@@ -37,7 +37,7 @@ class QuestionProcessor(Protocol):
 class PlaceholderQuestionProcessor:
     """Return the current placeholder answer until RAG adapters exist."""
 
-    def process(
+    async def process(
         self,
         question_id: str,
         question: str,
@@ -65,7 +65,7 @@ class PlaceholderQuestionProcessor:
 
 
 class LLMQuestionProcessor:
-    """Answer questions by calling an LLM client directly, without retrieval.
+    """Answer questions by awaiting an LLM client directly, without retrieval.
 
     Citations are empty and retrieval counts are zero until RAG is wired up.
 
@@ -77,7 +77,7 @@ class LLMQuestionProcessor:
         :param client: Language model client used to generate answers."""
         self._client = client
 
-    def process(
+    async def process(
         self,
         question_id: str,
         question: str,
@@ -101,7 +101,7 @@ class LLMQuestionProcessor:
         if request_id is not None:
             log_fields["request_id"] = request_id
         try:
-            generation = self._client.generate(question)
+            generation = await self._client.generate(question)
         except Exception as exc:
             elapsed_ms = round((time.perf_counter() - started_at) * 1000, 3)
             error_category = _generation_error_category(exc)
@@ -159,9 +159,10 @@ def build_question_processor(
     openai_api_key: str | None = None,
     *,
     timeout_seconds: float = 30.0,
-    max_output_tokens: int | None = None,
+    max_output_tokens: int | None = 1024,
     instructions: str | None = None,
     max_retries: int = 2,
+    openai_client=None,
 ) -> QuestionProcessor:
     """Return the question processor for a generation provider.
 
@@ -169,10 +170,13 @@ def build_question_processor(
     :param model: Model identifier passed to provider-backed clients.
     :param openai_api_key: Optional OpenAI key supplied by application settings.
     :param timeout_seconds: Per-request timeout for the OpenAI client.
-    :param max_output_tokens: Optional completion-token cap for the OpenAI client.
+    :param max_output_tokens: Completion-token cap for the OpenAI client. Defaults
+        to ``1024``.
     :param instructions: Optional instructions sent separately from the question.
     :param max_retries: Extra OpenAI attempts after rate limits, selected server
         errors, and transport failures.
+    :param openai_client: Optional shared async OpenAI SDK client owned by the
+        application lifespan. When omitted, the adapter may create one lazily.
     :returns: The placeholder processor for ``"local"``, or an LLM-backed processor.
     :raises UnknownGenerationProviderError: If the provider is not supported."""
     if provider == "local":
@@ -182,6 +186,7 @@ def build_question_processor(
             OpenAIResponsesClient(
                 model,
                 api_key=openai_api_key,
+                client=openai_client,
                 timeout_seconds=timeout_seconds,
                 max_output_tokens=max_output_tokens,
                 instructions=instructions,

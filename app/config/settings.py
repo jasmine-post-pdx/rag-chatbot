@@ -31,8 +31,8 @@ class Settings(BaseSettings):
     :ivar generation_model: Name or identifier of the generation model.
     :ivar generation_timeout_seconds: Per-request generation client timeout.
     :ivar generation_max_retries: Extra attempts after a failed generation request.
-    :ivar generation_max_output_tokens: Optional completion-token cap. Unset means
-        no explicit cap.
+    :ivar generation_max_output_tokens: Completion-token cap sent as
+        ``max_output_tokens``. Defaults to ``1024``.
     :ivar generation_instructions: Optional instructions sent separately from the
         question. Unset means no extra instructions.
     :ivar openai_api_key: Optional OpenAI API key loaded from the environment."""
@@ -67,7 +67,7 @@ class Settings(BaseSettings):
     generation_model: str = "stub"
     generation_timeout_seconds: float = Field(default=30.0, gt=0)
     generation_max_retries: int = Field(default=2, ge=0)
-    generation_max_output_tokens: int | None = Field(default=None, gt=0)
+    generation_max_output_tokens: int = Field(default=1024, gt=0)
     generation_instructions: str | None = None
     openai_api_key: SecretStr | None = None
 

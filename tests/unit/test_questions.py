@@ -364,22 +364,25 @@ def test_store_repairs_incomplete_idempotency_rows_on_open(tmp_path, store_facto
 # Workflow tests
 
 
+
 @pytest.mark.parametrize("idempotency_key", ["", "   ", "x" * 256])
-def test_workflow_rejects_invalid_idempotency_keys(store_factory, idempotency_key):
+@pytest.mark.asyncio
+async def test_workflow_rejects_invalid_idempotency_keys(store_factory, idempotency_key):
     """Blank or oversized idempotency keys raise InvalidIdempotencyKeyError."""
     workflow = QuestionWorkflow(store_factory(":memory:"))
 
     with pytest.raises(InvalidIdempotencyKeyError):
-        workflow.submit_question("Question", idempotency_key=idempotency_key)
+        await workflow.submit_question("Question", idempotency_key=idempotency_key)
 
 
-def test_submission_generates_distinct_job_ids_and_forwards_correlation(store_factory):
+@pytest.mark.asyncio
+async def test_submission_generates_distinct_job_ids_and_forwards_correlation(store_factory):
     """The workflow assigns job IDs and forwards the HTTP correlation ID separately."""
     class RecordingProcessor:
         def __init__(self):
             self.calls = []
 
-        def process(self, question_id, question, *, request_id=None):
+        async def process(self, question_id, question, *, request_id=None):
             self.calls.append((question_id, question, request_id))
             return _result(question_id)
 
@@ -387,8 +390,8 @@ def test_submission_generates_distinct_job_ids_and_forwards_correlation(store_fa
     processor = RecordingProcessor()
     workflow = QuestionWorkflow(store, processor)
 
-    first = workflow.submit_question("What is RAG?", request_id="http-request")
-    second = workflow.submit_question("What is RAG?", request_id="http-request")
+    first = await workflow.submit_question("What is RAG?", request_id="http-request")
+    second = await workflow.submit_question("What is RAG?", request_id="http-request")
 
     assert str(UUID(first.question_id, version=4)) == first.question_id
     assert str(UUID(second.question_id, version=4)) == second.question_id
@@ -401,30 +404,32 @@ def test_submission_generates_distinct_job_ids_and_forwards_correlation(store_fa
     assert store.get_job(second.question_id).result == second
 
 
-def test_submission_reuses_idempotent_result_without_reprocessing(store_factory):
+@pytest.mark.asyncio
+async def test_submission_reuses_idempotent_result_without_reprocessing(store_factory):
     """A repeated key returns the original job even though a new ID was generated."""
     class RecordingProcessor:
         def __init__(self):
             self.calls = 0
 
-        def process(self, question_id, question, *, request_id=None):
+        async def process(self, question_id, question, *, request_id=None):
             self.calls += 1
             return _result(question_id)
 
     processor = RecordingProcessor()
     workflow = QuestionWorkflow(store_factory(":memory:"), processor)
 
-    first = workflow.submit_question("Question", idempotency_key=" key ")
-    retry = workflow.submit_question("Question", idempotency_key="key")
+    first = await workflow.submit_question("Question", idempotency_key=" key ")
+    retry = await workflow.submit_question("Question", idempotency_key="key")
     with pytest.raises(IdempotencyKeyReuseError):
-        workflow.submit_question("Different", idempotency_key="key")
+        await workflow.submit_question("Different", idempotency_key="key")
 
     assert retry == first
     assert processor.calls == 1
 
 
 @pytest.mark.parametrize("job_status", ["pending", "completed"])
-def test_submission_rejects_incomplete_cached_job(store_factory, job_status):
+@pytest.mark.asyncio
+async def test_submission_rejects_incomplete_cached_job(store_factory, job_status):
     """Incomplete saved jobs yield the same safe, pollable processing error."""
     store = store_factory(":memory:")
     store._insert_job(
@@ -434,21 +439,22 @@ def test_submission_rejects_incomplete_cached_job(store_factory, job_status):
     )
     workflow = QuestionWorkflow(store)
     with pytest.raises(QuestionProcessingError) as error:
-        workflow.submit_question("Question", idempotency_key="key")
+        await workflow.submit_question("Question", idempotency_key="key")
 
     assert error.value.question_id == "existing-job"
     assert error.value.exception_type == "PreviousAttemptIncomplete"
 
 
 @pytest.mark.parametrize("processor_fails", [False, True])
-def test_submission_reuses_winning_job_after_idempotency_race(store_factory, processor_fails):
+@pytest.mark.asyncio
+async def test_submission_reuses_winning_job_after_idempotency_race(store_factory, processor_fails):
     """A job inserted after the initial lookup wins over either processing outcome."""
     class RacingStore(SQLiteQuestionJobStore):
         def get_by_idempotency_key(self, idempotency_key_hash):
             return None
 
     class Processor:
-        def process(self, question_id, question, *, request_id=None):
+        async def process(self, question_id, question, *, request_id=None):
             if processor_fails:
                 raise TimeoutError("provider failure")
             return _result(question_id)
@@ -462,20 +468,21 @@ def test_submission_reuses_winning_job_after_idempotency_race(store_factory, pro
     )
     workflow = QuestionWorkflow(store, Processor())
 
-    assert workflow.submit_question("Question", idempotency_key="key") == original
+    assert await workflow.submit_question("Question", idempotency_key="key") == original
     assert store.get_job("winner").result == original
 
 
-def test_submission_persists_failed_job_with_generated_id(store_factory):
+@pytest.mark.asyncio
+async def test_submission_persists_failed_job_with_generated_id(store_factory):
     """The ID exposed on a processing failure identifies the persisted failed job."""
     class FailingProcessor:
-        def process(self, question_id, question, *, request_id=None):
+        async def process(self, question_id, question, *, request_id=None):
             raise TimeoutError("sensitive provider details")
 
     store = store_factory(":memory:")
     workflow = QuestionWorkflow(store, FailingProcessor())
     with pytest.raises(QuestionProcessingError) as error:
-        workflow.submit_question("Question", request_id="http-request")
+        await workflow.submit_question("Question", request_id="http-request")
 
     assert str(UUID(error.value.question_id, version=4)) == error.value.question_id
     assert error.value.exception_type == "TimeoutError"
@@ -483,20 +490,67 @@ def test_submission_persists_failed_job_with_generated_id(store_factory):
     assert store.get_job(error.value.question_id).status == "failed"
 
 
-def test_workflow_completes_job_with_placeholder_result(store_factory):
+@pytest.mark.asyncio
+async def test_workflow_completes_job_with_placeholder_result(store_factory):
     """Verify the default processor completes a job with its placeholder result."""
     store = store_factory(":memory:")
     workflow = QuestionWorkflow(store, question_id_factory=lambda: "req-1")
 
-    result = workflow.submit_question("What is RAG?")
+    result = await workflow.submit_question("What is RAG?")
 
     assert result.answer == "This is a placeholder answer for: What is RAG?"
-    job = workflow.get_job("req-1")
+    job = await workflow.get_job("req-1")
     assert job is not None
     assert job.status == "completed"
 
 
-def test_workflow_passes_question_to_processor_and_persists_its_result(store_factory):
+@pytest.mark.asyncio
+async def test_workflow_honors_falsy_injected_processor(store_factory):
+    """Use an explicit processor even when it is falsy under ``bool()``.
+
+    A ``processor or Placeholder`` fallback would skip this object. The workflow
+    must use ``is not None`` so injected dependencies stay intentional.
+    """
+
+    class FalsyProcessor:
+        """A valid processor that evaluates false in boolean context."""
+
+        def __bool__(self) -> bool:
+            """Return ``False`` so truthiness-based injection would drop this object."""
+            return False
+
+        async def process(
+            self,
+            question_id: str,
+            question: str,
+            *,
+            request_id: str | None = None,
+        ) -> QuestionResult:
+            """Return a distinctive answer proving this processor ran."""
+            return QuestionResult(
+                question_id=question_id,
+                answer=f"Falsy processor answered: {question}",
+                citations=[],
+                retrieval=RetrievalMetrics(documents_considered=0, chunks_returned=0),
+                model=ModelMetrics(
+                    provider="test", name="falsy", input_tokens=0, output_tokens=0
+                ),
+            )
+
+    workflow = QuestionWorkflow(
+        store_factory(":memory:"),
+        FalsyProcessor(),
+        question_id_factory=lambda: "req-falsy",
+    )
+
+    result = await workflow.submit_question("Keep me")
+
+    assert result.answer == "Falsy processor answered: Keep me"
+    assert bool(FalsyProcessor()) is False
+
+
+@pytest.mark.asyncio
+async def test_workflow_passes_question_to_processor_and_persists_its_result(store_factory):
     """Verify the workflow forwards inputs and persists the processor result."""
     expected = _result("req-custom")
 
@@ -504,7 +558,7 @@ def test_workflow_passes_question_to_processor_and_persists_its_result(store_fac
         def __init__(self):
             self.call = None
 
-        def process(
+        async def process(
             self,
             question_id: str,
             question: str,
@@ -518,7 +572,7 @@ def test_workflow_passes_question_to_processor_and_persists_its_result(store_fac
     processor = RecordingProcessor()
     workflow = QuestionWorkflow(store, processor, question_id_factory=lambda: "req-custom")
 
-    result = workflow.submit_question("Use my processor")
+    result = await workflow.submit_question("Use my processor")
 
     assert processor.call == ("req-custom", "Use my processor")
     assert result == expected
@@ -528,10 +582,11 @@ def test_workflow_passes_question_to_processor_and_persists_its_result(store_fac
     assert job.result == expected
 
 
-def test_workflow_persists_failure_without_preserving_processor_exception(store_factory):
+@pytest.mark.asyncio
+async def test_workflow_persists_failure_without_preserving_processor_exception(store_factory):
     """Persist a failed job and expose only safe processor exception metadata."""
     class FailingProcessor:
-        def process(
+        async def process(
             self,
             question_id: str,
             question: str,
@@ -544,7 +599,7 @@ def test_workflow_persists_failure_without_preserving_processor_exception(store_
     workflow = QuestionWorkflow(store, FailingProcessor(), question_id_factory=lambda: "req-1")
 
     with pytest.raises(QuestionProcessingError) as error:
-        workflow.submit_question("What is RAG?")
+        await workflow.submit_question("What is RAG?")
 
     assert error.value.exception_type == "TimeoutError"
     assert error.value.__cause__ is None
@@ -557,7 +612,8 @@ def test_workflow_persists_failure_without_preserving_processor_exception(store_
     assert job.result is None
 
 
-def test_workflow_wraps_completed_job_persistence_failure(store_factory):
+@pytest.mark.asyncio
+async def test_workflow_wraps_completed_job_persistence_failure(store_factory):
     """Completed-job persistence failures become QuestionStatePersistenceError."""
     class FailingCompletedStore(SQLiteQuestionJobStore):
         def create_completed_job(self, question_id, result, **kwargs):
@@ -567,7 +623,7 @@ def test_workflow_wraps_completed_job_persistence_failure(store_factory):
     workflow = QuestionWorkflow(store, question_id_factory=lambda: "req-1")
 
     with pytest.raises(QuestionStatePersistenceError) as error:
-        workflow.submit_question("What is RAG?")
+        await workflow.submit_question("What is RAG?")
 
     assert error.value.question_id == "req-1"
     assert error.value.exception_type == "RuntimeError"
@@ -576,10 +632,11 @@ def test_workflow_wraps_completed_job_persistence_failure(store_factory):
     assert store.get_job("req-1") is None
 
 
-def test_workflow_marks_mismatched_processor_result_as_failed(store_factory):
+@pytest.mark.asyncio
+async def test_workflow_marks_mismatched_processor_result_as_failed(store_factory):
     """Verify a processor result for another job ID becomes a processing failure."""
     class MismatchedProcessor:
-        def process(
+        async def process(
             self,
             question_id: str,
             question: str,
@@ -592,7 +649,7 @@ def test_workflow_marks_mismatched_processor_result_as_failed(store_factory):
     workflow = QuestionWorkflow(store, MismatchedProcessor(), question_id_factory=lambda: "req-1")
 
     with pytest.raises(QuestionProcessingError) as error:
-        workflow.submit_question("What is RAG?")
+        await workflow.submit_question("What is RAG?")
 
     assert error.value.exception_type == "ValueError"
     assert error.value.__cause__ is None
