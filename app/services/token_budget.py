@@ -13,7 +13,8 @@ only for selected chunks.
 from __future__ import annotations
 
 import logging
-from typing import Protocol, Sequence
+from collections.abc import Sequence
+from typing import Protocol
 
 from app.domain.context import BudgetAllocation, BudgetRequest, RankedChunk
 from app.domain.errors import ContextBudgetExceededError
