@@ -32,7 +32,14 @@ class Settings(BaseSettings):
     :ivar generation_timeout_seconds: Per-request generation client timeout.
     :ivar generation_max_retries: Extra attempts after a failed generation request.
     :ivar generation_max_output_tokens: Completion-token cap sent as
-        ``max_output_tokens``. Defaults to ``1024``.
+        ``max_output_tokens``. Defaults to ``1024``. Also used as the output
+        reserve when allocating the input context budget.
+    :ivar generation_context_window_tokens: Model context-window size used for
+        input budgeting. Defaults to ``128000``.
+    :ivar generation_budget_safety_margin_tokens: Extra tokens reserved when
+        estimating available retrieval capacity. Defaults to ``256``.
+    :ivar generation_budget_debug: When ``True``, log extra budget metadata
+        fields. Defaults to ``False``.
     :ivar generation_instructions: Optional instructions sent separately from the
         question. Unset means no extra instructions.
     :ivar openai_api_key: Optional OpenAI API key loaded from the environment."""
@@ -68,6 +75,9 @@ class Settings(BaseSettings):
     generation_timeout_seconds: float = Field(default=30.0, gt=0)
     generation_max_retries: int = Field(default=2, ge=0)
     generation_max_output_tokens: int = Field(default=1024, gt=0)
+    generation_context_window_tokens: int = Field(default=128000, gt=0)
+    generation_budget_safety_margin_tokens: int = Field(default=256, ge=0)
+    generation_budget_debug: bool = False
     generation_instructions: str | None = None
     openai_api_key: SecretStr | None = None
 
