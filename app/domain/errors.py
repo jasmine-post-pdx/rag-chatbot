@@ -23,3 +23,36 @@ class InvalidIdempotencyKeyError(ValueError):
     def __init__(self) -> None:
         """Initialize with a stable client-facing error message."""
         super().__init__("Idempotency-Key must contain 1 to 255 characters")
+
+
+class ContextBudgetExceededError(ValueError):
+    """Fixed prompt input alone exceeds the model context budget.
+
+    Raised before any provider call so oversized requests are never sent
+    silently. The exception message is safe for logs and does not include
+    question, history, tool, or chunk text.
+
+    :ivar estimated_fixed_tokens: Tokens counted for fixed input plus reserves.
+    :ivar context_window_tokens: Configured model context-window size.
+    :ivar is_estimate: Whether the token counter labeled counts as estimates."""
+
+    def __init__(
+        self,
+        *,
+        estimated_fixed_tokens: int,
+        context_window_tokens: int,
+        is_estimate: bool,
+    ) -> None:
+        """Record budget figures without embedding prompt content.
+
+        :param estimated_fixed_tokens: Tokens counted for fixed input plus reserves.
+        :param context_window_tokens: Configured model context-window size.
+        :param is_estimate: Whether the underlying token counts are estimates."""
+        self.estimated_fixed_tokens = estimated_fixed_tokens
+        self.context_window_tokens = context_window_tokens
+        self.is_estimate = is_estimate
+        super().__init__(
+            "Fixed input exceeds the model context budget "
+            f"({estimated_fixed_tokens} > {context_window_tokens}"
+            f"{', estimate' if is_estimate else ''})"
+        )
