@@ -62,6 +62,9 @@ async def lifespan(app: FastAPI) -> None:
             instructions=settings.generation_instructions,
             max_retries=settings.generation_max_retries,
             openai_client=generation_client,
+            context_window_tokens=settings.generation_context_window_tokens,
+            safety_margin_tokens=settings.generation_budget_safety_margin_tokens,
+            budget_debug=settings.generation_budget_debug,
         )
         store = SQLiteQuestionJobStore(db_path=str(settings.questions_db_path))
         store.verify_integrity()

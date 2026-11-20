@@ -8,6 +8,7 @@ from app.services.question_processor import (
     UnknownGenerationProviderError,
     build_question_processor,
 )
+from app.services.token_budget import ApproximateTokenCounter, TiktokenTokenCounter
 
 
 def test_local_provider_uses_placeholder_processor():
@@ -15,6 +16,8 @@ def test_local_provider_uses_placeholder_processor():
     processor = build_question_processor("local", "stub")
 
     assert isinstance(processor, PlaceholderQuestionProcessor)
+    assert processor._budget is not None
+    assert isinstance(processor._budget.counter, ApproximateTokenCounter)
 
 
 def test_openai_provider_uses_llm_processor_without_requiring_api_key(monkeypatch):
@@ -24,10 +27,12 @@ def test_openai_provider_uses_llm_processor_without_requiring_api_key(monkeypatc
     processor = build_question_processor("openai", "gpt-test")
 
     assert isinstance(processor, LLMQuestionProcessor)
+    assert processor._budget is not None
+    assert isinstance(processor._budget.counter, TiktokenTokenCounter)
 
 
 def test_openai_provider_receives_generation_request_settings(monkeypatch):
-    """Pass timeout, output cap, and instructions through to the OpenAI client."""
+    """Pass timeout, output cap, budget, and instructions through to the client."""
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     processor = build_question_processor(
@@ -37,6 +42,9 @@ def test_openai_provider_receives_generation_request_settings(monkeypatch):
         max_output_tokens=256,
         instructions="Be concise.",
         max_retries=4,
+        context_window_tokens=8192,
+        safety_margin_tokens=64,
+        budget_debug=True,
     )
 
     client = processor._client
@@ -44,6 +52,12 @@ def test_openai_provider_receives_generation_request_settings(monkeypatch):
     assert client._max_output_tokens == 256
     assert client._instructions == "Be concise."
     assert client._max_retries == 4
+    assert processor._budget is not None
+    assert processor._budget.context_window_tokens == 8192
+    assert processor._budget.output_reserve_tokens == 256
+    assert processor._budget.safety_margin_tokens == 64
+    assert processor._budget.instructions == "Be concise."
+    assert processor._budget.debug is True
 
 
 @pytest.mark.parametrize("provider", ["anthropic", "", "OpenAI"])

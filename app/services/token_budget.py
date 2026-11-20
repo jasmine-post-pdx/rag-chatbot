@@ -132,6 +132,80 @@ def build_token_counter(*, provider: str, model: str) -> TokenCounter:
     return TiktokenTokenCounter(model)
 
 
+class ContextBudgetConfig:
+    """Settings and counter used to allocate context before generation.
+
+    :ivar counter: Token counter used for all budget measurements.
+    :ivar context_window_tokens: Model context-window size.
+    :ivar output_reserve_tokens: Tokens reserved for model output.
+    :ivar safety_margin_tokens: Extra tokens reserved for estimate error.
+    :ivar instructions: Optional instructions counted as fixed input.
+    :ivar debug: When ``True``, log extra numeric budget fields."""
+
+    def __init__(
+        self,
+        *,
+        counter: TokenCounter,
+        context_window_tokens: int,
+        output_reserve_tokens: int,
+        safety_margin_tokens: int,
+        instructions: str | None = None,
+        debug: bool = False,
+    ) -> None:
+        """Store budget settings for later allocation calls.
+
+        :param counter: Token counter used for all budget measurements.
+        :param context_window_tokens: Model context-window size.
+        :param output_reserve_tokens: Tokens reserved for model output.
+        :param safety_margin_tokens: Extra tokens reserved for estimate error.
+        :param instructions: Optional instructions counted as fixed input.
+        :param debug: When ``True``, log extra numeric budget fields."""
+        self.counter = counter
+        self.context_window_tokens = context_window_tokens
+        self.output_reserve_tokens = output_reserve_tokens
+        self.safety_margin_tokens = safety_margin_tokens
+        self.instructions = instructions
+        self.debug = debug
+
+    def allocate(
+        self,
+        question: str,
+        *,
+        request_id: str | None = None,
+        ranked_chunks: Sequence[RankedChunk] = (),
+        history: Sequence[str] = (),
+        tool_schemas: Sequence[str] = (),
+    ) -> BudgetAllocation:
+        """Allocate context for a question and log safe budget metadata.
+
+        :param question: User question text.
+        :param request_id: Optional HTTP correlation ID for logs.
+        :param ranked_chunks: Retrieval candidates in preferred order.
+        :param history: Prior turn texts counted as fixed input.
+        :param tool_schemas: Serialized tool schema strings.
+        :returns: The deterministic budget allocation.
+        :raises ContextBudgetExceededError: If fixed input alone exceeds the window."""
+        allocation = allocate_context_budget(
+            BudgetRequest(
+                question=question,
+                instructions=self.instructions,
+                history=list(history),
+                tool_schemas=list(tool_schemas),
+                ranked_chunks=list(ranked_chunks),
+            ),
+            counter=self.counter,
+            context_window_tokens=self.context_window_tokens,
+            output_reserve_tokens=self.output_reserve_tokens,
+            safety_margin_tokens=self.safety_margin_tokens,
+        )
+        log_budget_allocation(
+            allocation,
+            request_id=request_id,
+            debug=self.debug,
+        )
+        return allocation
+
+
 def allocate_context_budget(
     request: BudgetRequest,
     *,
