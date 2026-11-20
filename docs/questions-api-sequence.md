@@ -7,10 +7,10 @@ response models live in `app/schemas/`, separate from service DTOs.
 
 ## Submit a question
 
-`POST /v1/questions` processes the question synchronously and returns the
-completed result. The request body contains `question`; whitespace is stripped
-and the resulting value must contain 1–4,000 characters. An optional
-`Idempotency-Key` must contain 1–255 characters and cannot be blank.
+`POST /v1/questions` awaits generation and the SQLite writes, then returns the
+completed result in that same request. The request body contains `question`;
+whitespace is stripped and the resulting value must contain 1–4,000 characters.
+An optional `Idempotency-Key` must contain 1–255 characters and cannot be blank.
 
 ```mermaid
 sequenceDiagram
@@ -47,7 +47,7 @@ sequenceDiagram
                 API-->>MW: 422 Idempotency-Key must contain 1 to 255 characters
                 MW-->>Client: 422 with x-request-id
             else Key is within length limits
-                WF->>Store: Look up hashed key
+                WF->>Store: await to_thread(look up hashed key)
                 alt Stored idempotency row is incomplete
                     Store-->>WF: IncompleteIdempotencyRecordError
                     WF-->>API: IncompleteIdempotencyRecordError
@@ -207,8 +207,8 @@ sequenceDiagram
     MW->>API: Forward request
     API->>Dep: get_question_workflow(request)
     Dep-->>API: Shared workflow from app state
-    API->>WF: get_job(question_id)
-    WF->>Store: get_job(question_id)
+    API->>WF: await get_job(question_id)
+    WF->>Store: await to_thread(get_job)
     Store-->>WF: Stored job or none
     WF-->>API: Stored job or none
     alt Job exists

@@ -81,7 +81,10 @@ class QuestionWorkflow:
         request_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> QuestionResult:
-        """Assign a question ID and process the question asynchronously.
+        """Assign a question ID, await processing, and return the persisted result.
+
+        The caller receives the terminal result in this same call. Store lookups
+        and writes finish through ``asyncio.to_thread`` around that await.
 
         ``request_id`` is the HTTP correlation ID. It is independent of the
         question ID. An idempotency key can reuse a previously persisted job.

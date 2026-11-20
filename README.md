@@ -26,8 +26,9 @@ generation can change independently. Request flow today is:
 client
   -> async FastAPI routes (`app/routers/`) and request middleware (`app/middleware.py`)
     -> question routes -> await `QuestionWorkflow` (`app/services/question_workflow.py`)
+      -> await to_thread(`QuestionJobStore`) for an idempotency lookup, when a key is present
       -> await `QuestionProcessor` (`app/services/question_processor.py`)
-      -> `QuestionJobStore` via `asyncio.to_thread` (`app/stores/question_job_store.py`)
+      -> await to_thread(`QuestionJobStore`) to persist the terminal job
         -> `SQLiteQuestionJobStore` (`app/stores/sqlite.py`)
     -> readiness -> await to_thread(`QuestionJobStore.is_ready()`)
 ```
