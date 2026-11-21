@@ -45,13 +45,16 @@ def test_empty_environment_api_key_fails_settings_validation(monkeypatch, api_ke
 
 
 def test_generation_client_settings_use_current_client_defaults(monkeypatch):
-    """Keep timeout, retries, default output cap, and instructions defaults.
+    """Keep timeout, retries, budget, output cap, and instructions defaults.
 
     :param monkeypatch: Pytest fixture used to clear environment variables."""
     for name in (
         "GENERATION_TIMEOUT_SECONDS",
         "GENERATION_MAX_RETRIES",
         "GENERATION_MAX_OUTPUT_TOKENS",
+        "GENERATION_CONTEXT_WINDOW_TOKENS",
+        "GENERATION_BUDGET_SAFETY_MARGIN_TOKENS",
+        "GENERATION_BUDGET_DEBUG",
         "GENERATION_INSTRUCTIONS",
     ):
         monkeypatch.delenv(name, raising=False)
@@ -61,6 +64,9 @@ def test_generation_client_settings_use_current_client_defaults(monkeypatch):
     assert settings.generation_timeout_seconds == 30.0
     assert settings.generation_max_retries == 2
     assert settings.generation_max_output_tokens == 1024
+    assert settings.generation_context_window_tokens == 128000
+    assert settings.generation_budget_safety_margin_tokens == 256
+    assert settings.generation_budget_debug is False
     assert settings.generation_instructions is None
 
 
@@ -71,6 +77,9 @@ def test_generation_client_settings_load_from_environment(monkeypatch):
     monkeypatch.setenv("GENERATION_TIMEOUT_SECONDS", "12.5")
     monkeypatch.setenv("GENERATION_MAX_RETRIES", "4")
     monkeypatch.setenv("GENERATION_MAX_OUTPUT_TOKENS", "256")
+    monkeypatch.setenv("GENERATION_CONTEXT_WINDOW_TOKENS", "8192")
+    monkeypatch.setenv("GENERATION_BUDGET_SAFETY_MARGIN_TOKENS", "64")
+    monkeypatch.setenv("GENERATION_BUDGET_DEBUG", "true")
     monkeypatch.setenv("GENERATION_INSTRUCTIONS", "  Be concise.  ")
 
     settings = Settings(_env_file=None)
@@ -78,6 +87,9 @@ def test_generation_client_settings_load_from_environment(monkeypatch):
     assert settings.generation_timeout_seconds == 12.5
     assert settings.generation_max_retries == 4
     assert settings.generation_max_output_tokens == 256
+    assert settings.generation_context_window_tokens == 8192
+    assert settings.generation_budget_safety_margin_tokens == 64
+    assert settings.generation_budget_debug is True
     assert settings.generation_instructions == "Be concise."
 
 
@@ -87,13 +99,15 @@ def test_generation_client_settings_load_from_environment(monkeypatch):
         ("GENERATION_TIMEOUT_SECONDS", "0", "greater than 0"),
         ("GENERATION_MAX_RETRIES", "-1", "greater than or equal to 0"),
         ("GENERATION_MAX_OUTPUT_TOKENS", "0", "greater than 0"),
+        ("GENERATION_CONTEXT_WINDOW_TOKENS", "0", "greater than 0"),
+        ("GENERATION_BUDGET_SAFETY_MARGIN_TOKENS", "-1", "greater than or equal to 0"),
         ("GENERATION_INSTRUCTIONS", "   ", "GENERATION_INSTRUCTIONS must not be empty"),
     ],
 )
 def test_generation_client_settings_reject_invalid_values(
     monkeypatch, env_name, env_value, match
 ):
-    """Reject timeouts, retry counts, output caps, and instructions that cannot be used.
+    """Reject timeouts, retry counts, budget, output caps, and instructions that cannot be used.
 
     :param monkeypatch: Pytest fixture used to set environment variables.
     :param env_name: Setting environment variable to override.

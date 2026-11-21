@@ -4,10 +4,16 @@ import logging
 
 import pytest
 
+from app.domain.errors import ContextBudgetExceededError
 from app.domain.questions import ModelMetrics, RetrievalMetrics
 from app.llm import FakeLLMClient, GenerationResult
-from app.services.question_processor import LLMQuestionProcessor, QuestionProcessor
+from app.services.question_processor import (
+    LLMQuestionProcessor,
+    PlaceholderQuestionProcessor,
+    QuestionProcessor,
+)
 from app.services.question_workflow import QuestionProcessingError, QuestionWorkflow
+from app.services.token_budget import ApproximateTokenCounter, ContextBudgetConfig
 
 
 class RecordingClient:
@@ -308,6 +314,102 @@ async def test_workflow_marks_job_failed_when_processor_client_fails(store_facto
         await workflow.submit_question("What is RAG?")
 
     job = await workflow.get_job("req-1")
+    assert job is not None
+    assert job.status == "failed"
+    assert job.error_category == "processing_error"
+
+
+def _tiny_budget(*, instructions: str | None = None) -> ContextBudgetConfig:
+    """Build a budget that only fits a very short question.
+
+    :param instructions: Optional instructions counted as fixed input.
+    :returns: A context-budget configuration with a tiny window."""
+    return ContextBudgetConfig(
+        counter=ApproximateTokenCounter(),
+        context_window_tokens=8,
+        output_reserve_tokens=4,
+        safety_margin_tokens=0,
+        instructions=instructions,
+        debug=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_processor_with_budget_sends_assembled_prompt_for_empty_chunks():
+    """Budget the empty-chunk path and still send the bare question to generate."""
+    client = RecordingClient()
+    processor = LLMQuestionProcessor(
+        client,
+        budget=ContextBudgetConfig(
+            counter=ApproximateTokenCounter(),
+            context_window_tokens=128000,
+            output_reserve_tokens=1024,
+            safety_margin_tokens=256,
+        ),
+    )
+
+    result = await processor.process("req-1", "What is RAG?", request_id="http-1")
+
+    assert client.questions == ["What is RAG?"]
+    assert result.answer == "A generated answer"
+
+
+@pytest.mark.asyncio
+async def test_processor_rejects_over_budget_fixed_input_before_generate(caplog):
+    """Fail closed on oversized fixed input without calling the provider.
+
+    :param caplog: Pytest fixture used to capture structured log records."""
+    client = RecordingClient()
+    processor = LLMQuestionProcessor(client, budget=_tiny_budget())
+    caplog.set_level(logging.ERROR, logger="app.services.question_processor")
+
+    with pytest.raises(ContextBudgetExceededError):
+        await processor.process(
+            "req-over",
+            "This question is definitely too long for the tiny window",
+            request_id="http-over",
+        )
+
+    assert client.questions == []
+    record = next(
+        item
+        for item in caplog.records
+        if item.name == "app.services.question_processor"
+        and item.message.startswith("Generation failed:")
+    )
+    assert record.error_category == "context_budget_exceeded"
+    assert "This question is definitely too long" not in record.message
+
+
+@pytest.mark.asyncio
+async def test_placeholder_processor_rejects_over_budget_fixed_input():
+    """Local placeholder path also enforces the configured context budget."""
+    processor = PlaceholderQuestionProcessor(budget=_tiny_budget())
+
+    with pytest.raises(ContextBudgetExceededError):
+        await processor.process(
+            "req-over",
+            "This question is definitely too long for the tiny window",
+        )
+
+
+@pytest.mark.asyncio
+async def test_workflow_persists_context_budget_failure(store_factory):
+    """Persist over-budget failures as processing errors without provider calls."""
+    client = RecordingClient()
+    workflow = QuestionWorkflow(
+        store_factory(":memory:"),
+        LLMQuestionProcessor(client, budget=_tiny_budget()),
+        question_id_factory=lambda: "req-budget",
+    )
+
+    with pytest.raises(QuestionProcessingError):
+        await workflow.submit_question(
+            "This question is definitely too long for the tiny window"
+        )
+
+    assert client.questions == []
+    job = await workflow.get_job("req-budget")
     assert job is not None
     assert job.status == "failed"
     assert job.error_category == "processing_error"

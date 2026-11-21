@@ -1,10 +1,11 @@
 # rag-chatbot — RAG Engineering Lab
 
 > Status: This is an active learning project. The HTTP API, request/response
-> schemas, SQLite-backed question-job storage, and optional OpenAI generation
-> are implemented, but retrieval is still a placeholder. I consider the
-> current milestone complete enough to build on: the structure is testable,
-> documented, and ready for real RAG adapters to be dropped in.
+> schemas, SQLite-backed question-job storage, optional OpenAI generation, and
+> deterministic token/context budgeting are implemented, but retrieval is still
+> a placeholder. I consider the current milestone complete enough to build on:
+> the structure is testable, documented, and ready for real RAG adapters to be
+> dropped in.
 
 ## Why this exists
 
@@ -28,6 +29,7 @@ client
     -> question routes -> await `QuestionWorkflow` (`app/services/question_workflow.py`)
       -> await to_thread(`QuestionJobStore`) for an idempotency lookup, when a key is present
       -> await `QuestionProcessor` (`app/services/question_processor.py`)
+        -> `allocate_context_budget` (`app/services/token_budget.py`) before generate
       -> await to_thread(`QuestionJobStore`) to persist the terminal job
         -> `SQLiteQuestionJobStore` (`app/stores/sqlite.py`)
     -> readiness -> await to_thread(`QuestionJobStore.is_ready()`)
@@ -40,9 +42,9 @@ client
 | `app/routers/` | HTTP endpoints for health, readiness, and questions. |
 | `app/dependencies/` | Injects the shared workflow into question routes and the job store into readiness. |
 | `app/schemas/` | Public request/response models for the HTTP contract. |
-| `app/domain/` | Internal question/job DTOs and domain errors. |
+| `app/domain/` | Internal question/job DTOs, context-budget models, and domain errors. |
 | `app/config/` | Environment-based settings and logging configuration. |
-| `app/services/` | Question workflow (IDs, idempotency, persistence) and answer processors. |
+| `app/services/` | Question workflow, answer processors, and token/context budgeting. |
 | `app/stores/` | `QuestionJobStore` protocol and SQLite implementation. |
 | `app/llm/` | Provider-neutral async generation interfaces, OpenAI Responses adapter, and a fake client. |
 | `app/retrieval/` | Placeholder for chunking, indexing, search, ranking, and context assembly. |
@@ -63,6 +65,7 @@ generic HTTP 500. More detail lives in [`docs/architecture.md`](docs/architectur
 - **Python 3.11+** — the project language.
 - **FastAPI** — the web framework for the question API.
 - **Pydantic** — request/response schemas and job models.
+- **tiktoken** — token counting for OpenAI-oriented context budgeting.
 - **Uvicorn** — ASGI server for running the API.
 - **SQLite** — lightweight, local persistence for question jobs.
 - **pytest** — test runner for unit, integration, and evaluation tests.
@@ -137,8 +140,22 @@ The OpenAI client timeout is `GENERATION_TIMEOUT_SECONDS` (default `30`).
 That limit applies to each attempt. Retries and backoff can make the total
 wait longer than one timeout. `GENERATION_MAX_OUTPUT_TOKENS` defaults to
 `1024` and is always sent as `max_output_tokens`. Override it to change the
-cap. `GENERATION_INSTRUCTIONS`, when set, is sent separately from the
-question. Leave it unset to send no extra instructions.
+cap. That same value is reserved from the model context window when allocating
+input budget. `GENERATION_CONTEXT_WINDOW_TOKENS` (default `128000`) and
+`GENERATION_BUDGET_SAFETY_MARGIN_TOKENS` (default `256`) control how much room
+remains for retrieved evidence once instructions, the question, history, tool
+schemas, framing, the output reserve, and the safety margin are subtracted.
+OpenAI-oriented models count tokens with tiktoken; the local provider uses a
+character-based estimate and labels budget results as estimates. Ranked chunks
+are selected greedily in order; any chunk that does not fit the remaining
+capacity is skipped so later smaller chunks can still be included. If fixed
+input alone exceeds the window, the processor raises a controlled error and
+does not call the provider. Budget metadata is logged without question,
+history, tool, or chunk text; set `GENERATION_BUDGET_DEBUG=true` for extra
+numeric fields. Retrieval is not wired yet, so live requests budget an empty
+chunk list and still send the bare question as generation input.
+`GENERATION_INSTRUCTIONS`, when set, is sent separately from the question and
+counted as fixed input. Leave it unset to send no extra instructions.
 
 The shared async SDK client is created with `max_retries=0`, so the SDK does
 not retry on its own. The application retries HTTP 429, 500, 502, 503, and 504 up to
@@ -164,11 +181,13 @@ Postgres settings from the environment, using the same defaults as the
 application. The app service always sets `POSTGRES_HOST=postgres` so it can
 reach the optional Compose Postgres service; that value is not taken from
 `.env` or the host environment. It also forwards `GENERATION_PROVIDER`,
-`GENERATION_MODEL`, `GENERATION_TIMEOUT_SECONDS`, and `GENERATION_MAX_RETRIES`,
-again using the application defaults when those variables are unset. When a
-`.env` file is present, Compose loads it into the app container. That is how
-`OPENAI_API_KEY`, `GENERATION_MAX_OUTPUT_TOKENS`, and `GENERATION_INSTRUCTIONS`
-are forwarded without turning an unset value into an empty string.
+`GENERATION_MODEL`, `GENERATION_TIMEOUT_SECONDS`, `GENERATION_MAX_RETRIES`,
+`GENERATION_CONTEXT_WINDOW_TOKENS`, `GENERATION_BUDGET_SAFETY_MARGIN_TOKENS`,
+and `GENERATION_BUDGET_DEBUG`, again using the application defaults when those
+variables are unset. When a `.env` file is present, Compose loads it into the
+app container. That is how `OPENAI_API_KEY`, `GENERATION_MAX_OUTPUT_TOKENS`, and
+`GENERATION_INSTRUCTIONS` are forwarded without turning an unset value into an
+empty string.
 `LOG_LEVEL`, `EMBEDDING_PROVIDER`, and `EMBEDDING_MODEL` reach the container
 only when they are set in that `.env` file; otherwise they stay at application
 defaults. Exporting them in the host shell alone does not pass them through.
@@ -412,7 +431,8 @@ the SQLite store until the retrieval layer is wired up.
 
 - Answers are placeholders by default. With `GENERATION_PROVIDER=openai`, answers
   come from the model directly; retrieval is not implemented yet, so there are
-  no citations.
+  no citations. Context budgeting still runs with an empty chunk list so oversized
+  fixed input fails before a provider call.
 - Only the question-job endpoints are functional; there is no document ingestion
   or search endpoint.
 - `POST /v1/questions` still finishes in one request: it awaits generation,
@@ -467,9 +487,10 @@ ruff check app tests
 
 The integration tests exercise the HTTP API through a dependency override
 backed by an in-memory SQLite store. Unit tests cover configuration, logging,
-job storage, the placeholder and LLM processors, the async generation adapters,
-and event-loop isolation when SQLite or generation is blocked or cancelled.
-`tests/evals/` is still a placeholder for retrieval and answer-quality tests.
+job storage, the placeholder and LLM processors, token/context budgeting, the
+async generation adapters, and event-loop isolation when SQLite or generation
+is blocked or cancelled. `tests/evals/` is still a placeholder for retrieval
+and answer-quality tests.
 
 ## What's next
 
@@ -487,6 +508,8 @@ projects.
       variables.
 - [x] Await generation asynchronously and offload blocking SQLite work from the
       event loop (Step 2.5).
+- [x] Add deterministic token/context budgeting before retrieval is wired
+      (Step 3).
 - [ ] Make question jobs durable across disconnects or restarts with a real
       pending/completed worker lifecycle when latency requires it.
 

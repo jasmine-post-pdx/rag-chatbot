@@ -9,6 +9,33 @@ next steps as they stood at the time, not necessarily the current state.
 
 ---
 
+## 2026-11-20 — Deterministic context budgeting before retrieval
+
+**What I figured out**
+Step 3 added `app/services/token_budget.py` with injectable token counters
+(tiktoken for OpenAI-oriented models, character estimates for local) and
+`allocate_context_budget`. Available retrieval capacity is the context window
+minus instructions, question, history, tool schemas, framing, the output
+reserve, and a safety margin. Ranked chunks are selected greedily; oversized
+chunks are skipped. Fixed input that alone exceeds the window raises
+`ContextBudgetExceededError` so the provider is never called with an oversized
+request. Processors run the budget with an empty chunk list today and log only
+safe counts.
+
+**Why it matters**
+Retrieval can later hand ranked chunks to the same allocator without changing
+the public HTTP contract. Estimate labeling and the safety margin keep budget
+math honest when exact provider accounting is unavailable.
+
+**Still fuzzy**
+- How large real tool schemas and multi-turn history will squeeze retrieval
+- Whether citation text should be truncated separately from chunk selection
+
+**Next**
+Step 4 typed model outputs, still before full retrieval grounding.
+
+---
+
 ## 2026-11-13 — Awaited generation and kept SQLite off the event loop
 
 **What I figured out**
@@ -33,6 +60,7 @@ must survive disconnects.
 
 **Next**
 Step 3 token and context budgeting before retrieval is wired into answers.
+(Completed later; see the 2026-11-20 entry.)
 
 ---
 

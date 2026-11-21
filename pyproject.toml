@@ -9,6 +9,7 @@ dependencies = [
     "fastapi>=0.115",
     "openai>=1.0",
     "pydantic-settings>=2.0",
+    "tiktoken>=0.7",
     "uvicorn>=0.30",
 ]
 
