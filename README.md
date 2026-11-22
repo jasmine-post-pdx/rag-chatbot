@@ -133,8 +133,10 @@ or leave it unset.
 Generation uses an async OpenAI Responses client (`AsyncOpenAI`). When
 `GENERATION_PROVIDER=openai` and `OPENAI_API_KEY` is set, the FastAPI lifespan
 creates a shared SDK client, injects it into the processor, and closes it on
-shutdown. Callers await `generate`; retry backoff uses non-blocking sleep so
-the event loop can continue other work during waits.
+shutdown. Free-text callers can await `generate`; the question processor awaits
+`generate_structured` with versioned `AnswerV1` (Responses `parse` plus local
+validation). Retry backoff uses non-blocking sleep so the event loop can
+continue other work during waits.
 
 The OpenAI client timeout is `GENERATION_TIMEOUT_SECONDS` (default `30`).
 That limit applies to each attempt. Retries and backoff can make the total
@@ -157,6 +159,20 @@ chunk list and still send the bare question as generation input.
 `GENERATION_INSTRUCTIONS`, when set, is sent separately from the question and
 counted as fixed input. Leave it unset to send no extra instructions.
 
+Structured outputs use internal schema version `"1"`
+(`ClassificationV1` / `AnswerV1` in `app/domain/model_outputs.py`). The public
+HTTP contract still returns a plain `answer` string and empty `citations`;
+claims and `insufficient_evidence` stay internal until retrieval grounding.
+Extra fields and unknown enums are rejected. When evidence is claimed
+insufficient, claims must be empty; otherwise each claim needs at least one
+citation chunk ID. Classification is ready for later steps but is not called on
+live questions yet. See `docs/decisions/typed-outputs.md`.
+
+Structured recovery: provider refusals and local validation failures fail
+closed as processing errors without inventing fields. An incomplete structured
+finish gets one bounded re-request, then the same controlled failure. Prompt
+and answer text are omitted from those logs.
+
 The shared async SDK client is created with `max_retries=0`, so the SDK does
 not retry on its own. The application retries HTTP 429, 500, 502, 503, and 504 up to
 `GENERATION_MAX_RETRIES` (default `2`) extra attempts. Timeouts and connection
@@ -165,15 +181,15 @@ retry starts after a 60-second wall-clock budget. Authentication failures and
 bad requests are not retried. The wait before each retry is exponential
 backoff with equal jitter: the wait is between half and all of a ceiling that
 starts at half a second and caps at eight seconds. Each extra attempt is a new
-Responses API create. That call is not idempotent, so a transport retry can
-bill another generation when an earlier request reached the provider; those
-retries set `possible_duplicate_generation` on the warning log record (along
-with `retry_class` and `elapsed_seconds`). The default stdout formatter prints
-only a fixed field list, so those attributes appear in structured log capture
-but not in the one-line request-style output unless that list is extended.
-`input_tokens` and `output_tokens` are null when that provider omits usage. The
-example below shows the local placeholder, which reports zero because it does
-not call a model.
+Responses API create or parse. Those calls are not idempotent, so a transport
+retry can bill another generation when an earlier request reached the provider;
+those retries set `possible_duplicate_generation` on the warning log record
+(along with `retry_class` and `elapsed_seconds`). The default stdout formatter
+prints only a fixed field list, so those attributes appear in structured log
+capture but not in the one-line request-style output unless that list is
+extended. `input_tokens` and `output_tokens` are null when that provider omits
+usage. The example below shows the local placeholder, which reports zero
+because it does not call a model.
 
 Docker Compose sets `QUESTIONS_DB_PATH` to `/app/data/questions.db` and forwards
 the archive directory, backup directory, live and archive retention, and most

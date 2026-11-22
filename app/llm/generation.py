@@ -5,11 +5,16 @@ import logging
 import random
 import time
 from collections.abc import Awaitable, Callable
-from typing import Protocol
+from dataclasses import dataclass
+from typing import Generic, Protocol, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
+
+from app.domain.errors import StructuredOutputError
 
 logger = logging.getLogger(__name__)
+
+TModel = TypeVar("TModel", bound=BaseModel)
 
 # Rate limits and selected server errors. Other 4xx responses are not retried.
 _RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
@@ -54,11 +59,34 @@ class GenerationResult(BaseModel):
     provider_request_id: str | None = None
 
 
+@dataclass(frozen=True)
+class StructuredGenerationResult(Generic[TModel]):
+    """Schema-constrained generation outcome with provider metadata.
+
+    :ivar parsed: Locally validated structured output.
+    :ivar provider: Provider identifier, such as ``"openai"`` or ``"fake"``.
+    :ivar model: Model identifier reported for the generation.
+    :ivar input_tokens: Input tokens reported by the provider, or ``None``.
+    :ivar output_tokens: Output tokens reported by the provider, or ``None``.
+    :ivar finish_status: Provider finish status, such as ``"completed"``.
+    :ivar refusal: Refusal text when the provider returned one.
+    :ivar provider_request_id: Provider response ID for this generation."""
+
+    parsed: TModel
+    provider: str
+    model: str
+    input_tokens: int | None
+    output_tokens: int | None
+    finish_status: str | None = None
+    refusal: str | None = None
+    provider_request_id: str | None = None
+
+
 class LLMClient(Protocol):
     """Interface implemented by language model generation clients.
 
     Implementations return provider-reported token usage with each answer.
-    Callers must await ``generate``.
+    Callers must await ``generate`` and ``generate_structured``.
     """
 
     async def generate(self, question: str) -> GenerationResult:
@@ -68,18 +96,55 @@ class LLMClient(Protocol):
         :returns: Generated text with provider, model, and token usage metadata."""
         ...
 
+    async def generate_structured(
+        self,
+        prompt: str,
+        output_model: type[TModel],
+    ) -> StructuredGenerationResult[TModel]:
+        """Generate a schema-constrained payload and validate it locally.
+
+        :param prompt: Prompt text sent as generation input.
+        :param output_model: Pydantic model describing the expected output.
+        :returns: Parsed model instance with provider metadata.
+        :raises StructuredOutputError: On refusal, incomplete, or invalid output."""
+        ...
+
 
 class FakeLLMClient:
     """Return deterministic responses without contacting a model provider.
 
-    :ivar model: Model identifier reported in each generated result."""
+    :ivar model: Model identifier reported in each generated result.
+    :ivar _structured_payload: Optional object or mapping returned by
+        ``generate_structured`` after local validation.
+    :ivar _structured_refusal: When set, structured generation fails as refusal.
+    :ivar _structured_incomplete: When true, structured generation fails as incomplete.
+    :ivar _structured_finish_status: Finish status reported on structured success."""
 
-    def __init__(self, model: str = "fake") -> None:
+    def __init__(
+        self,
+        model: str = "fake",
+        *,
+        structured_payload: BaseModel | dict | None = None,
+        structured_refusal: str | None = None,
+        structured_incomplete: bool = False,
+        structured_finish_status: str | None = "completed",
+    ) -> None:
         """Initialize the fake client.
 
-        :param model: Model identifier to report in generated results."""
+        :param model: Model identifier to report in generated results.
+        :param structured_payload: Canned structured output for
+            ``generate_structured``. Validated against the requested model.
+        :param structured_refusal: When set, ``generate_structured`` raises a
+            refusal ``StructuredOutputError``.
+        :param structured_incomplete: When true, ``generate_structured`` raises
+            an incomplete ``StructuredOutputError``.
+        :param structured_finish_status: Finish status on structured success."""
         self.model = model
         self.provider = "fake"
+        self._structured_payload = structured_payload
+        self._structured_refusal = structured_refusal
+        self._structured_incomplete = structured_incomplete
+        self._structured_finish_status = structured_finish_status
 
     async def generate(self, question: str) -> GenerationResult:
         """Return a stable answer without making a provider request.
@@ -92,6 +157,57 @@ class FakeLLMClient:
             model=self.model,
             input_tokens=0,
             output_tokens=0,
+        )
+
+    async def generate_structured(
+        self,
+        prompt: str,
+        output_model: type[TModel],
+    ) -> StructuredGenerationResult[TModel]:
+        """Return a canned structured payload or a controlled structured failure.
+
+        :param prompt: Prompt text; unused except to satisfy the interface.
+        :param output_model: Pydantic model used to validate the canned payload.
+        :returns: Parsed model with zero token usage.
+        :raises StructuredOutputError: On configured refusal, incomplete output,
+            missing payload, or local validation failure."""
+        if self._structured_refusal is not None:
+            raise StructuredOutputError("refusal")
+        if self._structured_incomplete:
+            raise StructuredOutputError("incomplete")
+        try:
+            if self._structured_payload is None:
+                # Default AnswerV1-shaped abstention so unconfigured fakes still work.
+                parsed = output_model.model_validate(
+                    {
+                        "answer": f"Fake answer to: {prompt}",
+                        "claims": [],
+                        "insufficient_evidence": True,
+                    }
+                )
+            elif isinstance(self._structured_payload, output_model):
+                parsed = self._structured_payload
+            elif isinstance(self._structured_payload, BaseModel):
+                parsed = output_model.model_validate(
+                    self._structured_payload.model_dump()
+                )
+            else:
+                parsed = output_model.model_validate(self._structured_payload)
+        except ValidationError as exc:
+            if self._structured_payload is None:
+                raise StructuredOutputError(
+                    "unsupported",
+                    "FakeLLMClient has no structured_payload configured for "
+                    f"{output_model.__name__}",
+                ) from exc
+            raise StructuredOutputError("validation") from exc
+        return StructuredGenerationResult(
+            parsed=parsed,
+            provider="fake",
+            model=self.model,
+            input_tokens=0,
+            output_tokens=0,
+            finish_status=self._structured_finish_status,
         )
 
 
@@ -210,21 +326,17 @@ class OpenAIResponsesClient:
             body["max_output_tokens"] = self._max_output_tokens
         return body
 
-    async def generate(self, question: str) -> GenerationResult:
-        """Generate an answer and return provider-reported token usage.
+    async def _with_retries(self, call: Callable[[], Awaitable[object]]) -> object:
+        """Await a provider call with the shared retry policy.
 
-        :param question: User question to send as the Responses API input.
-        :returns: Generated text, the model identifier, and reported token usage.
-        :raises MissingAPIKeyError: If ``OPENAI_API_KEY`` is not set.
-        :raises Exception: The provider error from the final attempt. Retryable
-            failures are retried up to ``max_retries`` extra times."""
-        client = self._get_client()
-        body = self._request_body(question)
+        :param call: Zero-argument async callable that performs one attempt.
+        :returns: The successful provider response object.
+        :raises Exception: The provider error from the final attempt."""
         started = self._clock()
         transport_retries = 0
         for attempt in range(self._max_retries + 1):
             try:
-                response = await client.responses.create(**body)
+                return await call()
             except Exception as exc:
                 kind = _retry_class(exc)
                 elapsed = self._clock() - started
@@ -260,9 +372,58 @@ class OpenAIResponsesClient:
                     },
                 )
                 await self._sleeper(_retry_delay_seconds(attempt, self._rng()))
-                continue
-            return _generation_result(response, self._model)
         raise RuntimeError("generation retry loop ended without a result")
+
+    async def generate(self, question: str) -> GenerationResult:
+        """Generate an answer and return provider-reported token usage.
+
+        :param question: User question to send as the Responses API input.
+        :returns: Generated text, the model identifier, and reported token usage.
+        :raises MissingAPIKeyError: If ``OPENAI_API_KEY`` is not set.
+        :raises Exception: The provider error from the final attempt. Retryable
+            failures are retried up to ``max_retries`` extra times."""
+        client = self._get_client()
+        body = self._request_body(question)
+
+        async def _create() -> object:
+            return await client.responses.create(**body)
+
+        response = await self._with_retries(_create)
+        return _generation_result(response, self._model)
+
+    async def generate_structured(
+        self,
+        prompt: str,
+        output_model: type[TModel],
+    ) -> StructuredGenerationResult[TModel]:
+        """Generate schema-constrained output via Responses ``parse``, then re-validate.
+
+        Uses the provider's structured-output support when available, then validates
+        the parsed payload locally against ``output_model`` (including invariants).
+        Refusals, incomplete finishes, missing parsed payloads, and local validation
+        failures become ``StructuredOutputError`` without inventing fields.
+
+        :param prompt: Prompt text sent as the Responses API input.
+        :param output_model: Pydantic model describing the expected output.
+        :returns: Locally validated parsed model with provider metadata.
+        :raises MissingAPIKeyError: If ``OPENAI_API_KEY`` is not set.
+        :raises StructuredOutputError: On refusal, incomplete, unsupported, or
+            invalid structured output.
+        :raises Exception: Retryable provider transport/status errors after retries."""
+        client = self._get_client()
+        body = self._request_body(prompt)
+        parse = getattr(client.responses, "parse", None)
+        if not callable(parse):
+            raise StructuredOutputError(
+                "unsupported",
+                "Provider client does not support schema-constrained responses.parse",
+            )
+
+        async def _parse() -> object:
+            return await parse(**body, text_format=output_model)
+
+        response = await self._with_retries(_parse)
+        return _structured_generation_result(response, self._model, output_model)
 
 
 def _generation_result(response: object, fallback_model: str) -> GenerationResult:
@@ -285,6 +446,59 @@ def _generation_result(response: object, fallback_model: str) -> GenerationResul
         refusal=refusal,
         provider_request_id=_provider_request_id(response),
     )
+
+
+def _structured_generation_result(
+    response: object,
+    fallback_model: str,
+    output_model: type[TModel],
+) -> StructuredGenerationResult[TModel]:
+    """Map a parsed Responses API result and re-validate the structured payload.
+
+    :param response: Provider parsed response object or mapping.
+    :param fallback_model: Model identifier used when the response omits ``model``.
+    :param output_model: Pydantic model used for local validation.
+    :returns: Structured result with only provider-reported metadata.
+    :raises StructuredOutputError: On refusal, incomplete finish, missing parsed
+        payload, or local validation failure."""
+    refusal = _refusal_text(response)
+    finish_status = _finish_status(response)
+    reported_model = getattr(response, "model", None)
+    if not isinstance(reported_model, str) or reported_model == "":
+        reported_model = fallback_model
+    metadata = {
+        "provider": "openai",
+        "model": reported_model,
+        "input_tokens": _reported_token_count(
+            getattr(response, "usage", None), "input_tokens"
+        ),
+        "output_tokens": _reported_token_count(
+            getattr(response, "usage", None), "output_tokens"
+        ),
+        "finish_status": finish_status,
+        "refusal": refusal,
+        "provider_request_id": _provider_request_id(response),
+    }
+    if refusal is not None:
+        raise StructuredOutputError("refusal")
+    if finish_status == "incomplete":
+        raise StructuredOutputError("incomplete")
+    parsed_value = getattr(response, "output_parsed", None)
+    if parsed_value is None and isinstance(response, dict):
+        parsed_value = response.get("output_parsed")
+    if parsed_value is None:
+        raise StructuredOutputError("validation")
+    try:
+        if isinstance(parsed_value, output_model):
+            # Re-validate so domain invariants still run after SDK parsing.
+            parsed = output_model.model_validate(parsed_value.model_dump())
+        elif isinstance(parsed_value, BaseModel):
+            parsed = output_model.model_validate(parsed_value.model_dump())
+        else:
+            parsed = output_model.model_validate(parsed_value)
+    except ValidationError as exc:
+        raise StructuredOutputError("validation") from exc
+    return StructuredGenerationResult(parsed=parsed, **metadata)
 
 
 def _retry_class(exc: Exception) -> str | None:

@@ -9,6 +9,35 @@ next steps as they stood at the time, not necessarily the current state.
 
 ---
 
+## 2026-11-20 — Typed model outputs before tools and retrieval
+
+**What I figured out**
+Step 4 added versioned `ClassificationV1` and `AnswerV1` schemas under
+`app/domain/model_outputs.py`, a `StructuredOutputError` for controlled
+failures, and `LLMClient.generate_structured` behind the existing provider
+boundary. OpenAI uses Responses `parse` with `text_format`, then re-validates
+locally. The LLM question processor maps `AnswerV1.answer` onto the public
+`QuestionResult` while citations stay empty. Incomplete structured finishes get
+one retry; refusals and invariant violations fail closed. Classification is
+tested but not wired into the live question path yet.
+
+**Why it matters**
+Schema-constrained output gives a stable place for claims, citation chunk IDs,
+and abstention before tool loops or retrieval grounding. Versioning avoids
+silently breaking callers when the contract changes.
+
+**Still fuzzy**
+- Whether public responses should later expose claims / insufficient_evidence
+  under a versioned API change
+- How classification filters will interact with real retrieval metadata
+
+**Next**
+Step 5 safe read-only tool calls (search/get chunk) with allow-listed tools.
+
+See also `docs/decisions/typed-outputs.md`.
+
+---
+
 ## 2026-11-20 — Deterministic context budgeting before retrieval
 
 **What I figured out**

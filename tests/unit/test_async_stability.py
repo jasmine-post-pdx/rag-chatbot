@@ -7,7 +7,7 @@ import time
 import pytest
 
 from app.domain.questions import ModelMetrics, QuestionResult, RetrievalMetrics
-from app.llm import FakeLLMClient, GenerationResult
+from app.llm import FakeLLMClient, StructuredGenerationResult
 from app.services.question_processor import LLMQuestionProcessor
 from app.services.question_workflow import QuestionWorkflow
 from app.stores.sqlite import SQLiteQuestionJobStore
@@ -83,7 +83,7 @@ async def test_blocked_sqlite_lookup_does_not_freeze_event_loop(store_factory):
 
 @pytest.mark.asyncio
 async def test_cancelled_generation_does_not_leak_store_lock(store_factory):
-    """Cancel during ``await generate`` and still reuse the store afterward.
+    """Cancel during ``await generate_structured`` and still reuse the store afterward.
 
     Verified behavior: cancelling the submit task before persistence leaves no
     terminal job for that ID, and a later submission can still write through the
@@ -95,20 +95,25 @@ async def test_cancelled_generation_does_not_leak_store_lock(store_factory):
     hold = asyncio.Event()
 
     class HoldingClient:
-        """Pause inside generate until the test cancels or releases it."""
+        """Pause inside generate_structured until the test cancels or releases it."""
 
         provider = "fake"
         model = "hold"
 
-        async def generate(self, question: str) -> GenerationResult:
-            """Wait until released, then return a deterministic answer.
+        async def generate_structured(self, prompt: str, output_model: type):
+            """Wait until released, then return a deterministic structured answer.
 
-            :param question: User question that would be answered.
-            :returns: A generation result after the hold is cleared."""
+            :param prompt: Prompt that would be answered.
+            :param output_model: Expected structured output type.
+            :returns: A structured generation result after the hold is cleared."""
             entered.set()
             await hold.wait()
-            return GenerationResult(
-                answer=f"Late answer to: {question}",
+            return StructuredGenerationResult(
+                parsed=output_model(
+                    answer=f"Late answer to: {prompt}",
+                    claims=[],
+                    insufficient_evidence=True,
+                ),
                 provider="fake",
                 model="hold",
                 input_tokens=0,

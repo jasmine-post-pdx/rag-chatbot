@@ -14,6 +14,7 @@ client
       -> await to_thread(`QuestionJobStore`) for an idempotency lookup, when a key is present
       -> await `QuestionProcessor` (`app/services/question_processor.py`)
         -> `allocate_context_budget` (`app/services/token_budget.py`) before generate
+        -> await `generate_structured(AnswerV1)` (`app/llm/`) for the OpenAI path
       -> await to_thread(`QuestionJobStore`) to persist the terminal job
         -> `SQLiteQuestionJobStore` (`app/stores/sqlite.py`)
     -> readiness -> await to_thread(`QuestionJobStore.is_ready()`)
@@ -29,9 +30,9 @@ client
 | `app/services/token_budget.py` | Token counters and deterministic context-budget allocation before generation. |
 | `app/stores/` | `QuestionJobStore` protocol and SQLite-backed implementation. |
 | `scripts/question_job_maintenance.py` | SQLite snapshots, tiered backup rotation, and terminal-job archiving. |
-| `app/domain/` | Internal job, answer, and context-budget DTOs, plus domain errors such as idempotency-key reuse, incomplete idempotency records, invalid keys, and context-budget overflow. |
+| `app/domain/` | Internal job, answer, context-budget, and typed model-output DTOs, plus domain errors such as idempotency-key reuse, incomplete idempotency records, invalid keys, context-budget overflow, and structured-output failures. |
 | `app/schemas/` | Independent public question, health, and error schemas, including safe processing failure categories. |
-| `app/llm/` | Async generation interfaces, local fake, and OpenAI Responses adapter. |
+| `app/llm/` | Async free-text and schema-constrained generation interfaces, local fake, and OpenAI Responses adapter. |
 | `app/retrieval/`, `app/tools/` | Package placeholders; no retrieval or tool behavior is implemented yet. |
 
 The FastAPI application lifespan creates, verifies, and owns the SQLite store,
@@ -56,6 +57,13 @@ estimates. Ranked chunks are selected greedily in order; chunks that do not fit
 are skipped. If fixed input alone exceeds the window, processing fails closed
 without calling the provider. Live requests still supply an empty chunk list
 because retrieval is not wired yet. Budget logs omit prompt and chunk text.
+The OpenAI processor path then requests schema-constrained `AnswerV1` output
+(`generate_structured`), re-validates locally, and maps only the answer text
+onto the public result; citations remain empty until retrieval grounding.
+`ClassificationV1` exists for later filter/tool steps but is not invoked on
+live questions yet. Incomplete structured finishes get one bounded re-request;
+refusals and validation failures become controlled processing failures. See
+`docs/decisions/typed-outputs.md`.
 Processing failures are persisted as failed jobs with a safe error category; the
 submit request still returns a generic server error. API handlers map service
 results and their nested metadata to public schemas. The store serializes jobs as
@@ -77,7 +85,7 @@ or an ingestion pipeline.
 
 | Path | Current contents |
 | --- | --- |
-| `tests/unit/` | Configuration, logging, SQLite job storage, question processors, token/context budgeting, async generation adapters, and event-loop isolation. |
+| `tests/unit/` | Configuration, logging, SQLite job storage, question processors, typed model-output schemas, token/context budgeting, async generation adapters, and event-loop isolation. |
 | `tests/integration/` | HTTP API behavior, OpenAPI and schema contracts, lifespan, request logging, generation wiring, and an opt-in OpenAI smoke test. |
 | `tests/evals/` | Placeholder package; no retrieval or answer-quality evaluations exist yet. |
 
