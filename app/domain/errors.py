@@ -56,3 +56,23 @@ class ContextBudgetExceededError(ValueError):
             f"({estimated_fixed_tokens} > {context_window_tokens}"
             f"{', estimate' if is_estimate else ''})"
         )
+
+
+class StructuredOutputError(ValueError):
+    """Structured model output was refused, incomplete, invalid, or unsupported.
+
+    The exception message is safe for logs and does not include prompt, answer,
+    claim, or document text.
+
+    :ivar category: Stable failure category such as ``refusal``, ``incomplete``,
+        ``validation``, or ``unsupported``."""
+
+    def __init__(self, category: str, message: str | None = None) -> None:
+        """Record a safe category and optional short message.
+
+        :param category: Stable failure category for logging and mapping.
+        :param message: Optional safe detail; defaults to a category-based text."""
+        self.category = category
+        if message is None:
+            message = f"Structured model output failed: {category}"
+        super().__init__(message)
