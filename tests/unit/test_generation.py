@@ -7,11 +7,15 @@ from types import ModuleType, SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
+from app.domain.errors import StructuredOutputError
+from app.domain.model_outputs import AnswerClaim, AnswerV1
 from app.llm import (
+    FakeLLMClient,
     GenerationResult,
     LLMClient,
     MissingAPIKeyError,
     OpenAIResponsesClient,
+    StructuredGenerationResult,
 )
 
 
@@ -67,16 +71,96 @@ async def test_llm_client_uses_structural_generate_interface():
                 output_tokens=5,
             )
 
+        async def generate_structured(self, prompt: str, output_model: type):
+            """Return a canned structured answer for protocol satisfaction."""
+            return StructuredGenerationResult(
+                parsed=output_model(
+                    answer=f"Structured: {prompt}",
+                    claims=[],
+                    insufficient_evidence=True,
+                ),
+                provider="test-provider",
+                model="test-model",
+                input_tokens=3,
+                output_tokens=5,
+            )
+
     client: LLMClient = FakeClient()
 
     result = await client.generate("What is RAG?")
     assert result.answer == "Answer to: What is RAG?"
 
 
+def _valid_answer_payload() -> dict:
+    """Return a minimal valid AnswerV1 payload."""
+    return {
+        "schema_version": "1",
+        "answer": "Structured fake answer",
+        "claims": [
+            {"claim": "A supported claim", "citation_chunk_ids": ["chunk-1"]},
+        ],
+        "insufficient_evidence": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_fake_client_generate_structured_success():
+    """Return and locally validate a canned structured payload."""
+    client = FakeLLMClient(structured_payload=_valid_answer_payload())
+
+    result = await client.generate_structured("What is RAG?", AnswerV1)
+
+    assert isinstance(result.parsed, AnswerV1)
+    assert result.parsed.answer == "Structured fake answer"
+    assert result.provider == "fake"
+    assert result.input_tokens == 0
+    assert result.finish_status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_fake_client_generate_structured_refusal():
+    """Surface refusals as StructuredOutputError without inventing fields."""
+    client = FakeLLMClient(structured_refusal="Cannot answer that.")
+
+    with pytest.raises(StructuredOutputError, match="refusal") as exc_info:
+        await client.generate_structured("What is RAG?", AnswerV1)
+
+    assert exc_info.value.category == "refusal"
+
+
+@pytest.mark.asyncio
+async def test_fake_client_generate_structured_incomplete():
+    """Surface incomplete structured finishes as StructuredOutputError."""
+    client = FakeLLMClient(structured_incomplete=True)
+
+    with pytest.raises(StructuredOutputError) as exc_info:
+        await client.generate_structured("What is RAG?", AnswerV1)
+
+    assert exc_info.value.category == "incomplete"
+
+
+@pytest.mark.asyncio
+async def test_fake_client_generate_structured_validation_failure():
+    """Reject canned payloads that violate AnswerV1 invariants."""
+    client = FakeLLMClient(
+        structured_payload={
+            "schema_version": "1",
+            "answer": "Bad",
+            "claims": [{"claim": "Unsupported", "citation_chunk_ids": []}],
+            "insufficient_evidence": False,
+        }
+    )
+
+    with pytest.raises(StructuredOutputError) as exc_info:
+        await client.generate_structured("What is RAG?", AnswerV1)
+
+    assert exc_info.value.category == "validation"
+
+
 class _FakeResponses:
     """Record Responses API calls and return a canned response.
 
-    :ivar calls: Keyword arguments passed to each ``create`` call, in call order."""
+    :ivar calls: Keyword arguments passed to each ``create`` or ``parse`` call."""
 
     def __init__(self) -> None:
         """Initialize the fake with no recorded calls."""
@@ -88,6 +172,7 @@ class _FakeResponses:
             status="completed",
             id="resp_ok",
             output=[],
+            output_parsed=None,
         )
 
     async def create(self, **kwargs):
@@ -95,6 +180,14 @@ class _FakeResponses:
 
         :param **kwargs: Request parameters, such as ``model`` and ``input``.
         :returns: An object shaped like an SDK response."""
+        self.calls.append(kwargs)
+        return self.response
+
+    async def parse(self, **kwargs):
+        """Record a structured parse request and return the configured response.
+
+        :param **kwargs: Request parameters, including ``text_format``.
+        :returns: An object shaped like an SDK parsed response."""
         self.calls.append(kwargs)
         return self.response
 
@@ -249,6 +342,141 @@ async def test_openai_client_sends_instructions_and_output_cap_when_configured()
 
 
 @pytest.mark.asyncio
+async def test_openai_client_generate_structured_uses_parse_and_validates():
+    """Pass text_format to responses.parse and re-validate the parsed payload."""
+    responses = _FakeResponses()
+    responses.response = SimpleNamespace(
+        output_text="",
+        model="gpt-test-2026",
+        usage=SimpleNamespace(input_tokens=11, output_tokens=13),
+        status="completed",
+        id="resp_parsed",
+        output=[],
+        output_parsed=AnswerV1(
+            answer="Parsed answer",
+            claims=[AnswerClaim(claim="Claim", citation_chunk_ids=["c1"])],
+            insufficient_evidence=False,
+        ),
+    )
+    client = OpenAIResponsesClient(
+        "gpt-test",
+        client=SimpleNamespace(responses=responses),
+        instructions="Be precise.",
+        max_output_tokens=128,
+    )
+
+    result = await client.generate_structured("What is RAG?", AnswerV1)
+
+    assert responses.calls == [
+        {
+            "model": "gpt-test",
+            "input": "What is RAG?",
+            "instructions": "Be precise.",
+            "max_output_tokens": 128,
+            "text_format": AnswerV1,
+        }
+    ]
+    assert result.parsed.answer == "Parsed answer"
+    assert result.provider_request_id == "resp_parsed"
+    assert result.input_tokens == 11
+    assert result.output_tokens == 13
+
+
+@pytest.mark.asyncio
+async def test_openai_client_generate_structured_refusal():
+    """Map provider refusal content to StructuredOutputError."""
+    responses = _FakeResponses()
+    responses.response = SimpleNamespace(
+        output_text="",
+        model="gpt-test-2026",
+        usage=SimpleNamespace(input_tokens=2, output_tokens=1),
+        status="completed",
+        id="resp_refused_structured",
+        output=[
+            SimpleNamespace(
+                content=[SimpleNamespace(type="refusal", refusal="Cannot answer.")]
+            )
+        ],
+        output_parsed=None,
+    )
+    client = OpenAIResponsesClient(
+        "gpt-test", client=SimpleNamespace(responses=responses)
+    )
+
+    with pytest.raises(StructuredOutputError) as exc_info:
+        await client.generate_structured("What is RAG?", AnswerV1)
+
+    assert exc_info.value.category == "refusal"
+
+
+@pytest.mark.asyncio
+async def test_openai_client_generate_structured_incomplete():
+    """Map incomplete finish status to StructuredOutputError."""
+    responses = _FakeResponses()
+    responses.response = SimpleNamespace(
+        output_text="",
+        model="gpt-test-2026",
+        usage=None,
+        status="incomplete",
+        id="resp_incomplete",
+        output=[],
+        output_parsed={"answer": "truncated", "claims": [], "insufficient_evidence": True},
+    )
+    client = OpenAIResponsesClient(
+        "gpt-test", client=SimpleNamespace(responses=responses)
+    )
+
+    with pytest.raises(StructuredOutputError) as exc_info:
+        await client.generate_structured("What is RAG?", AnswerV1)
+
+    assert exc_info.value.category == "incomplete"
+
+
+@pytest.mark.asyncio
+async def test_openai_client_generate_structured_malformed_payload():
+    """Fail closed when parsed output violates AnswerV1 invariants."""
+    responses = _FakeResponses()
+    responses.response = SimpleNamespace(
+        output_text="",
+        model="gpt-test-2026",
+        usage=SimpleNamespace(input_tokens=1, output_tokens=1),
+        status="completed",
+        id="resp_bad",
+        output=[],
+        output_parsed={
+            "schema_version": "1",
+            "answer": "Bad",
+            "claims": [{"claim": "No cites", "citation_chunk_ids": []}],
+            "insufficient_evidence": False,
+        },
+    )
+    client = OpenAIResponsesClient(
+        "gpt-test", client=SimpleNamespace(responses=responses)
+    )
+
+    with pytest.raises(StructuredOutputError) as exc_info:
+        await client.generate_structured("What is RAG?", AnswerV1)
+
+    assert exc_info.value.category == "validation"
+
+
+@pytest.mark.asyncio
+async def test_openai_client_generate_structured_unsupported_without_parse():
+    """Fail closed when the injected client has no responses.parse method."""
+    responses = SimpleNamespace(
+        create=_FakeResponses().create,
+    )
+    client = OpenAIResponsesClient(
+        "gpt-test", client=SimpleNamespace(responses=responses)
+    )
+
+    with pytest.raises(StructuredOutputError) as exc_info:
+        await client.generate_structured("What is RAG?", AnswerV1)
+
+    assert exc_info.value.category == "unsupported"
+
+
+@pytest.mark.asyncio
 async def test_openai_client_configures_sdk_timeout_without_sdk_retries(monkeypatch):
     """Create the async SDK client with the configured timeout and no SDK retries.
 
@@ -304,6 +532,10 @@ class _ScriptedResponses:
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
+
+    async def parse(self, **kwargs):
+        """Record a structured parse call and return or raise the next outcome."""
+        return await self.create(**kwargs)
 
 
 def _completed_response():
