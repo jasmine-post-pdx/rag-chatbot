@@ -4,9 +4,10 @@ import logging
 
 import pytest
 
-from app.domain.errors import ContextBudgetExceededError
+from app.domain.errors import ContextBudgetExceededError, StructuredOutputError
+from app.domain.model_outputs import AnswerClaim, AnswerV1
 from app.domain.questions import ModelMetrics, RetrievalMetrics
-from app.llm import FakeLLMClient, GenerationResult
+from app.llm import FakeLLMClient, StructuredGenerationResult
 from app.services.question_processor import (
     LLMQuestionProcessor,
     PlaceholderQuestionProcessor,
@@ -16,52 +17,86 @@ from app.services.question_workflow import QuestionProcessingError, QuestionWork
 from app.services.token_budget import ApproximateTokenCounter, ContextBudgetConfig
 
 
+def _answer(
+    text: str = "A generated answer",
+    *,
+    insufficient_evidence: bool = True,
+    claims: list[AnswerClaim] | None = None,
+) -> AnswerV1:
+    """Build a valid AnswerV1 for processor fakes.
+
+    :param text: Answer text to embed.
+    :param insufficient_evidence: Abstention flag.
+    :param claims: Optional claims; defaults to empty when abstaining.
+    :returns: A validated AnswerV1 instance."""
+    return AnswerV1(
+        answer=text,
+        claims=[] if claims is None else claims,
+        insufficient_evidence=insufficient_evidence,
+    )
+
+
 class RecordingClient:
-    """Return a fixed generation result and record the question it received.
+    """Return a fixed structured result and record prompts received.
 
-    :ivar questions: Questions passed to ``generate``, in call order."""
+    :ivar prompts: Prompts passed to ``generate_structured``, in call order."""
 
-    def __init__(self) -> None:
-        """Initialize the client with no recorded questions."""
-        self.questions: list[str] = []
+    def __init__(self, parsed: AnswerV1 | None = None) -> None:
+        """Initialize the client with no recorded prompts.
 
-    async def generate(self, question: str) -> GenerationResult:
-        """Record the question and return fixed usage metadata.
+        :param parsed: Optional structured answer; defaults to an abstention."""
+        self.prompts: list[str] = []
+        self._parsed = parsed if parsed is not None else _answer()
 
-        :param question: User question to record.
-        :returns: A fixed answer with known provider, model, and token usage."""
-        self.questions.append(question)
-        return GenerationResult(
-            answer="A generated answer",
+    async def generate_structured(self, prompt: str, output_model: type):
+        """Record the prompt and return fixed structured usage metadata.
+
+        :param prompt: Prompt text to record.
+        :param output_model: Expected output model type.
+        :returns: A fixed structured answer with known provider metadata."""
+        assert output_model is AnswerV1
+        self.prompts.append(prompt)
+        return StructuredGenerationResult(
+            parsed=self._parsed,
             provider="test-provider",
             model="test-model",
             input_tokens=12,
             output_tokens=34,
+            finish_status="completed",
+            provider_request_id="resp_ok",
         )
 
 
 class FailingClient:
-    """Simulate a provider that fails every generation request."""
+    """Simulate a provider that fails every structured generation request."""
 
-    async def generate(self, question: str) -> GenerationResult:
+    async def generate_structured(self, prompt: str, output_model: type):
         """Raise a provider failure.
 
-        :param question: User question that would have been answered.
+        :param prompt: Prompt that would have been answered.
+        :param output_model: Expected output model type.
         :raises RuntimeError: Always, to simulate an unavailable provider."""
         raise RuntimeError("provider unavailable")
 
 
 @pytest.mark.asyncio
-async def test_processor_maps_generation_result_to_question_result():
-    """Verify answer, provider, model, and token usage are mapped onto the result."""
-    client = RecordingClient()
+async def test_processor_maps_structured_result_to_question_result():
+    """Map structured answer text and provider usage onto the question result."""
+    client = RecordingClient(
+        parsed=_answer(
+            "A generated answer",
+            insufficient_evidence=False,
+            claims=[AnswerClaim(claim="Claim", citation_chunk_ids=["c1"])],
+        )
+    )
     processor = LLMQuestionProcessor(client)
 
     result = await processor.process("req-1", "What is RAG?")
 
-    assert client.questions == ["What is RAG?"]
+    assert client.prompts == ["What is RAG?"]
     assert result.question_id == "req-1"
     assert result.answer == "A generated answer"
+    assert result.citations == []
     assert result.model == ModelMetrics(
         provider="test-provider",
         name="test-model",
@@ -97,31 +132,32 @@ async def test_processor_logs_generation_metadata_with_correlation_and_question_
     assert record.elapsed_ms >= 0
     assert record.input_tokens == 12
     assert record.output_tokens == 34
+    assert record.insufficient_evidence is True
+    assert record.claim_count == 0
 
 
 @pytest.mark.asyncio
-async def test_processor_maps_missing_usage_and_logs_status_without_refusal(caplog):
-    """Preserve null usage and log status and provider ID, not refusal text.
+async def test_processor_maps_missing_usage_without_logging_answer_text(caplog):
+    """Preserve null usage and omit answer or claim text from success logs.
 
     :param caplog: Pytest fixture used to capture structured log records."""
 
     class MissingUsageClient:
-        """Return a refusal with no reported token usage."""
+        """Return structured success with no reported token usage."""
 
         provider = "test-provider"
         model = "test-model"
 
-        async def generate(self, question: str) -> GenerationResult:
+        async def generate_structured(self, prompt: str, output_model: type):
             """Return a result whose provider omitted token usage."""
-            return GenerationResult(
-                answer="Cannot answer that.",
+            return StructuredGenerationResult(
+                parsed=_answer("Cannot answer that."),
                 provider="test-provider",
                 model="test-model",
                 input_tokens=None,
                 output_tokens=None,
-                finish_status="incomplete",
-                refusal="Cannot answer that.",
-                provider_request_id="resp_refused",
+                finish_status="completed",
+                provider_request_id="resp_ok",
             )
 
     caplog.set_level(logging.INFO, logger="app.services.question_processor")
@@ -144,8 +180,8 @@ async def test_processor_maps_missing_usage_and_logs_status_without_refusal(capl
     )
     assert record.input_tokens is None
     assert record.output_tokens is None
-    assert record.finish_status == "incomplete"
-    assert record.provider_request_id == "resp_refused"
+    assert record.finish_status == "completed"
+    assert record.provider_request_id == "resp_ok"
     assert "private prompt text" not in record.message
     assert "Cannot answer that." not in record.message
     formatted = logging.Formatter().format(record)
@@ -157,18 +193,19 @@ async def test_processor_logs_sanitized_failure_category_without_question(caplog
     """Log a safe categorized provider failure without exposing prompt text.
 
     :param caplog: Pytest fixture used to capture structured log records."""
-    class FailingClient:
+
+    class FailingPromptClient:
         """Raise a provider-style error containing sensitive request values."""
 
         provider = "test-provider"
         model = "test-model"
 
-        async def generate(self, question: str) -> GenerationResult:
+        async def generate_structured(self, prompt: str, output_model: type):
             """Raise an error that echoes the prompt and a credential pattern."""
-            raise RuntimeError(f"Rejected question: {question}; password=secret")
+            raise RuntimeError(f"Rejected question: {prompt}; password=secret")
 
     caplog.set_level(logging.ERROR, logger="app.services.question_processor")
-    processor = LLMQuestionProcessor(FailingClient())
+    processor = LLMQuestionProcessor(FailingPromptClient())
 
     with pytest.raises(RuntimeError):
         await processor.process(
@@ -199,6 +236,7 @@ async def test_processor_returns_empty_citations_and_zero_retrieval():
     """Verify non-RAG answers report no citations and no retrieval work."""
     result = await LLMQuestionProcessor(FakeLLMClient()).process("req-1", "What is RAG?")
 
+    assert result.answer == "Fake answer to: What is RAG?"
     assert result.citations == []
     assert result.retrieval == RetrievalMetrics(
         documents_considered=0, chunks_returned=0
@@ -210,6 +248,109 @@ async def test_processor_propagates_client_errors():
     """Verify client failures are not swallowed so the workflow can record them."""
     with pytest.raises(RuntimeError, match="provider unavailable"):
         await LLMQuestionProcessor(FailingClient()).process("req-1", "What is RAG?")
+
+
+@pytest.mark.asyncio
+async def test_processor_raises_on_structured_refusal(caplog):
+    """Refuse structured refusals without inventing an answer.
+
+    :param caplog: Pytest fixture used to capture structured log records."""
+    client = FakeLLMClient(structured_refusal="Cannot answer that.")
+    processor = LLMQuestionProcessor(client)
+    caplog.set_level(logging.ERROR, logger="app.services.question_processor")
+
+    with pytest.raises(StructuredOutputError) as raised:
+        await processor.process("req-1", "private prompt text", request_id="http-1")
+
+    assert raised.value.category == "refusal"
+    record = next(
+        item
+        for item in caplog.records
+        if item.message.startswith("Generation failed:")
+    )
+    assert record.error_category == "structured_output_refusal"
+    assert "private prompt text" not in record.message
+    assert "Cannot answer that." not in record.message
+
+
+@pytest.mark.asyncio
+async def test_processor_retries_incomplete_structured_output_once(caplog):
+    """Retry one incomplete structured finish, then succeed.
+
+    :param caplog: Pytest fixture used to capture structured log records."""
+
+    class IncompleteThenOkClient:
+        """Fail once as incomplete, then return a valid structured answer."""
+
+        provider = "test-provider"
+        model = "test-model"
+        calls = 0
+
+        async def generate_structured(self, prompt: str, output_model: type):
+            """Raise incomplete on the first call, then return success."""
+            type(self).calls += 1
+            if type(self).calls == 1:
+                raise StructuredOutputError("incomplete")
+            return StructuredGenerationResult(
+                parsed=_answer("Recovered answer"),
+                provider="test-provider",
+                model="test-model",
+                input_tokens=1,
+                output_tokens=2,
+                finish_status="completed",
+            )
+
+    IncompleteThenOkClient.calls = 0
+    caplog.set_level(logging.WARNING, logger="app.services.question_processor")
+    result = await LLMQuestionProcessor(IncompleteThenOkClient()).process(
+        "req-1", "What is RAG?"
+    )
+
+    assert IncompleteThenOkClient.calls == 2
+    assert result.answer == "Recovered answer"
+    assert any(
+        record.message == "Retrying incomplete structured output"
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_processor_stops_after_bounded_incomplete_retries(caplog):
+    """Fail closed when structured output stays incomplete after one retry.
+
+    :param caplog: Pytest fixture used to capture structured log records."""
+    client = FakeLLMClient(structured_incomplete=True)
+    processor = LLMQuestionProcessor(client)
+    caplog.set_level(logging.ERROR, logger="app.services.question_processor")
+
+    with pytest.raises(StructuredOutputError) as raised:
+        await processor.process("req-1", "What is RAG?")
+
+    assert raised.value.category == "incomplete"
+    record = next(
+        item
+        for item in caplog.records
+        if item.message.startswith("Generation failed:")
+    )
+    assert record.error_category == "structured_output_incomplete"
+
+
+@pytest.mark.asyncio
+async def test_processor_raises_on_structured_validation_failure():
+    """Fail closed when the structured payload violates AnswerV1 invariants."""
+    client = FakeLLMClient(
+        structured_payload={
+            "schema_version": "1",
+            "answer": "Bad",
+            "claims": [{"claim": "No cites", "citation_chunk_ids": []}],
+            "insufficient_evidence": False,
+        }
+    )
+
+    with pytest.raises(StructuredOutputError) as raised:
+        await LLMQuestionProcessor(client).process("req-1", "What is RAG?")
+
+    assert raised.value.category == "validation"
 
 
 @pytest.mark.asyncio
@@ -269,9 +410,9 @@ async def test_workflow_logs_failure_class_and_persists_processing_error(
         provider = "openai"
         model = "gpt-test"
 
-        async def generate(self, question: str) -> GenerationResult:
+        async def generate_structured(self, prompt: str, output_model: type):
             """Raise the parametrized provider error, including the prompt."""
-            raise error_type(f"Rejected question: {question}")
+            raise error_type(f"Rejected question: {prompt}")
 
     caplog.set_level(logging.ERROR, logger="app.services.question_processor")
     workflow = QuestionWorkflow(
@@ -319,6 +460,24 @@ async def test_workflow_marks_job_failed_when_processor_client_fails(store_facto
     assert job.error_category == "processing_error"
 
 
+@pytest.mark.asyncio
+async def test_workflow_persists_structured_output_failure(store_factory):
+    """Persist structured refusals as failed jobs with the public error category."""
+    workflow = QuestionWorkflow(
+        store_factory(":memory:"),
+        LLMQuestionProcessor(FakeLLMClient(structured_refusal="nope")),
+        question_id_factory=lambda: "req-structured",
+    )
+
+    with pytest.raises(QuestionProcessingError):
+        await workflow.submit_question("What is RAG?")
+
+    job = await workflow.get_job("req-structured")
+    assert job is not None
+    assert job.status == "failed"
+    assert job.error_category == "processing_error"
+
+
 def _tiny_budget(*, instructions: str | None = None) -> ContextBudgetConfig:
     """Build a budget that only fits a very short question.
 
@@ -350,7 +509,7 @@ async def test_processor_with_budget_sends_assembled_prompt_for_empty_chunks():
 
     result = await processor.process("req-1", "What is RAG?", request_id="http-1")
 
-    assert client.questions == ["What is RAG?"]
+    assert client.prompts == ["What is RAG?"]
     assert result.answer == "A generated answer"
 
 
@@ -370,7 +529,7 @@ async def test_processor_rejects_over_budget_fixed_input_before_generate(caplog)
             request_id="http-over",
         )
 
-    assert client.questions == []
+    assert client.prompts == []
     record = next(
         item
         for item in caplog.records
@@ -408,7 +567,7 @@ async def test_workflow_persists_context_budget_failure(store_factory):
             "This question is definitely too long for the tiny window"
         )
 
-    assert client.questions == []
+    assert client.prompts == []
     job = await workflow.get_job("req-budget")
     assert job is not None
     assert job.status == "failed"

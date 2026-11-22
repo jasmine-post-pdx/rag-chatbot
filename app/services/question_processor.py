@@ -5,7 +5,8 @@ import time
 from typing import Protocol
 
 from app.config.logging import sanitize_exception_summary
-from app.domain.errors import ContextBudgetExceededError
+from app.domain.errors import ContextBudgetExceededError, StructuredOutputError
+from app.domain.model_outputs import AnswerV1
 from app.domain.questions import (
     ModelMetrics,
     QuestionResult,
@@ -15,6 +16,9 @@ from app.llm.generation import LLMClient, OpenAIResponsesClient
 from app.services.token_budget import ContextBudgetConfig, build_token_counter
 
 logger = logging.getLogger(__name__)
+
+# One extra provider call when structured output finishes incomplete/truncated.
+_STRUCTURED_INCOMPLETE_RETRIES = 1
 
 
 class QuestionProcessor(Protocol):
@@ -84,9 +88,14 @@ class PlaceholderQuestionProcessor:
 
 
 class LLMQuestionProcessor:
-    """Answer questions by awaiting an LLM client directly, without retrieval.
+    """Answer questions via schema-constrained generation, without retrieval.
 
-    Citations are empty and retrieval counts are zero until RAG is wired up.
+    Requests ``AnswerV1`` from the LLM client, validates locally, and maps the
+    structured ``answer`` field onto ``QuestionResult``. Citations stay empty
+    and retrieval counts stay zero until RAG is wired up. Incomplete structured
+    finishes get one bounded re-request; refusals and validation failures fail
+    closed without inventing fields.
+
     When a context budget is configured, fixed input is checked and the
     assembled prompt (currently the bare question) is sent to the client.
 
@@ -114,14 +123,16 @@ class LLMQuestionProcessor:
         *,
         request_id: str | None = None,
     ) -> QuestionResult:
-        """Generate an answer and map it to a question result.
+        """Generate a structured answer and map it to a question result.
 
         :param question_id: Identifier of the question job being processed.
         :param question: User question to answer.
         :param request_id: HTTP request ID used to correlate logs.
         :returns: The generated answer with model usage and empty retrieval metadata.
         :raises ContextBudgetExceededError: If configured fixed input exceeds the
-            context budget before the provider is called."""
+            context budget before the provider is called.
+        :raises StructuredOutputError: If structured output is refused, remains
+            incomplete after recovery, or fails local validation."""
         started_at = time.perf_counter()
         provider = getattr(self._client, "provider", type(self._client).__name__)
         model = getattr(self._client, "model", "unknown")
@@ -152,23 +163,61 @@ class LLMQuestionProcessor:
                 raise
             prompt = allocation.assembled_prompt
 
-        try:
-            generation = await self._client.generate(prompt)
-        except Exception as exc:
-            elapsed_ms = round((time.perf_counter() - started_at) * 1000, 3)
-            error_category = _generation_error_category(exc)
-            summary = sanitize_exception_summary(exc, sensitive_values=(question, prompt))
-            logger.error(
-                "Generation failed: %s",
-                summary,
-                extra={
-                    **log_fields,
-                    "elapsed_ms": elapsed_ms,
-                    "error_category": error_category,
-                    "exception_type": type(exc).__name__,
-                },
-            )
-            raise
+        generation = None
+        incomplete_retries = 0
+        while True:
+            try:
+                generation = await self._client.generate_structured(prompt, AnswerV1)
+                break
+            except StructuredOutputError as exc:
+                if (
+                    exc.category == "incomplete"
+                    and incomplete_retries < _STRUCTURED_INCOMPLETE_RETRIES
+                ):
+                    incomplete_retries += 1
+                    logger.warning(
+                        "Retrying incomplete structured output",
+                        extra={
+                            **log_fields,
+                            "attempt": incomplete_retries,
+                            "error_category": "structured_output_incomplete",
+                        },
+                    )
+                    continue
+                elapsed_ms = round((time.perf_counter() - started_at) * 1000, 3)
+                error_category = _generation_error_category(exc)
+                summary = sanitize_exception_summary(
+                    exc, sensitive_values=(question, prompt)
+                )
+                logger.error(
+                    "Generation failed: %s",
+                    summary,
+                    extra={
+                        **log_fields,
+                        "elapsed_ms": elapsed_ms,
+                        "error_category": error_category,
+                        "exception_type": type(exc).__name__,
+                        "structured_output_category": exc.category,
+                    },
+                )
+                raise
+            except Exception as exc:
+                elapsed_ms = round((time.perf_counter() - started_at) * 1000, 3)
+                error_category = _generation_error_category(exc)
+                summary = sanitize_exception_summary(
+                    exc, sensitive_values=(question, prompt)
+                )
+                logger.error(
+                    "Generation failed: %s",
+                    summary,
+                    extra={
+                        **log_fields,
+                        "elapsed_ms": elapsed_ms,
+                        "error_category": error_category,
+                        "exception_type": type(exc).__name__,
+                    },
+                )
+                raise
 
         elapsed_ms = round((time.perf_counter() - started_at) * 1000, 3)
         logger.info(
@@ -182,11 +231,13 @@ class LLMQuestionProcessor:
                 "output_tokens": generation.output_tokens,
                 "finish_status": generation.finish_status,
                 "provider_request_id": generation.provider_request_id,
+                "insufficient_evidence": generation.parsed.insufficient_evidence,
+                "claim_count": len(generation.parsed.claims),
             },
         )
         return QuestionResult(
             question_id=question_id,
-            answer=generation.answer,
+            answer=generation.parsed.answer,
             citations=[],
             retrieval=RetrievalMetrics(documents_considered=0, chunks_returned=0),
             model=ModelMetrics(
@@ -274,6 +325,8 @@ def _generation_error_category(exc: Exception) -> str:
     :returns: A stable category such as ``provider_timeout`` or ``provider_error``."""
     if isinstance(exc, ContextBudgetExceededError):
         return "context_budget_exceeded"
+    if isinstance(exc, StructuredOutputError):
+        return f"structured_output_{exc.category}"
     name = type(exc).__name__.lower()
     if isinstance(exc, TimeoutError) or "timeout" in name:
         return "provider_timeout"
