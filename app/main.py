@@ -14,6 +14,7 @@ from app.config.logging import (
 )
 from app.config.settings import settings
 from app.middleware import REQUEST_ID_HEADER, RequestLogMiddleware
+from app.retrieval.memory import InMemoryDocumentStore, sample_corpus
 from app.routers import health, questions
 from app.schemas.errors import ServerErrorResponse, ValidationErrorResponse
 from app.services.question_processor import build_question_processor
@@ -52,6 +53,13 @@ async def lifespan(app: FastAPI) -> None:
             max_retries=0,
         )
     store = None
+    document_store = None
+    if settings.generation_provider == "openai":
+        # Step 5: deterministic in-memory corpus; Step 6 replaces this adapter.
+        document_store = InMemoryDocumentStore(
+            sample_corpus(),
+            max_limit=settings.tool_search_max_limit,
+        )
     try:
         processor = build_question_processor(
             settings.generation_provider,
@@ -65,6 +73,12 @@ async def lifespan(app: FastAPI) -> None:
             context_window_tokens=settings.generation_context_window_tokens,
             safety_margin_tokens=settings.generation_budget_safety_margin_tokens,
             budget_debug=settings.generation_budget_debug,
+            document_store=document_store,
+            tool_max_result_chars=settings.tool_max_result_chars,
+            tool_call_timeout_seconds=settings.tool_call_timeout_seconds,
+            tool_search_max_limit=settings.tool_search_max_limit,
+            tool_max_turns=settings.tool_max_turns,
+            tool_max_calls=settings.tool_max_calls,
         )
         store = SQLiteQuestionJobStore(db_path=str(settings.questions_db_path))
         store.verify_integrity()

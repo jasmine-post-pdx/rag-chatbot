@@ -51,6 +51,28 @@ def test_openai_provider_uses_llm_processor_without_requiring_api_key(monkeypatc
     assert processor._budget.context_window_tokens == 128000
     assert processor._budget.output_reserve_tokens == 1024
     assert processor._budget.safety_margin_tokens == 256
+    assert processor._document_store is None
+
+
+def test_openai_provider_accepts_document_store_for_tools(monkeypatch):
+    """Pass an in-memory document store through to the OpenAI processor."""
+    from app.retrieval.memory import InMemoryDocumentStore
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    store = InMemoryDocumentStore([])
+
+    processor = build_question_processor(
+        "openai",
+        "gpt-test",
+        document_store=store,
+        tool_max_turns=2,
+        tool_max_calls=4,
+    )
+
+    assert isinstance(processor, LLMQuestionProcessor)
+    assert processor._document_store is store
+    assert processor._tool_max_turns == 2
+    assert processor._tool_max_calls == 4
 
 
 def test_openai_provider_receives_generation_request_settings(monkeypatch):

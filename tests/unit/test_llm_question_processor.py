@@ -577,3 +577,195 @@ async def test_workflow_persists_context_budget_failure(store_factory):
     assert job is not None
     assert job.status == "failed"
     assert job.error_category == "processing_error"
+
+
+@pytest.mark.asyncio
+async def test_processor_with_document_store_runs_tool_loop():
+    """When a document store is injected, complete a tool loop and map metrics."""
+    from app.domain.tools import ToolCallProposal
+    from app.llm.generation import ToolTurnResult
+    from app.retrieval.document_store import DocumentChunk
+    from app.retrieval.memory import InMemoryDocumentStore
+
+    store = InMemoryDocumentStore(
+        [
+            DocumentChunk(
+                source_id="fastapi-guide",
+                chunk_id="c1",
+                text="FastAPI dependency injection uses Depends.",
+                framework="fastapi",
+                language="python",
+            )
+        ]
+    )
+    client = FakeLLMClient(
+        tool_turns=[
+            ToolTurnResult(
+                kind="tool_calls",
+                tool_calls=[
+                    ToolCallProposal(
+                        call_id="call-1",
+                        name="search_documents",
+                        arguments={"query": "Depends", "limit": 2},
+                    )
+                ],
+            ),
+            ToolTurnResult(
+                kind="structured",
+                structured=StructuredGenerationResult(
+                    parsed=_answer(
+                        "FastAPI uses Depends.",
+                        insufficient_evidence=False,
+                        claims=[
+                            AnswerClaim(
+                                claim="Depends wires dependencies",
+                                citation_chunk_ids=["c1"],
+                            )
+                        ],
+                    ),
+                    provider="fake",
+                    model="fake",
+                    input_tokens=3,
+                    output_tokens=5,
+                    finish_status="completed",
+                ),
+            ),
+        ]
+    )
+    processor = LLMQuestionProcessor(client, document_store=store)
+
+    result = await processor.process("req-tools", "How does FastAPI inject?", request_id="http-t")
+
+    assert result.answer == "FastAPI uses Depends."
+    assert result.citations == []
+    assert result.retrieval.documents_considered >= 1
+    assert result.retrieval.chunks_returned >= 1
+    assert result.model.provider == "fake"
+    assert result.model.input_tokens == 3
+
+
+@pytest.mark.asyncio
+async def test_processor_without_store_keeps_single_shot_structured_path():
+    """Without a document store, keep the existing generate_structured path."""
+    client = RecordingClient(parsed=_answer("Single shot"))
+    processor = LLMQuestionProcessor(client)
+
+    result = await processor.process("req-1", "What is RAG?")
+
+    assert client.prompts == ["What is RAG?"]
+    assert result.answer == "Single shot"
+    assert result.retrieval == RetrievalMetrics(
+        documents_considered=0, chunks_returned=0
+    )
+
+
+@pytest.mark.asyncio
+async def test_processor_with_store_passes_tool_schemas_to_budget():
+    """Budget fixed input includes serialized tool schemas when tools are enabled."""
+    from app.retrieval.memory import InMemoryDocumentStore
+    from app.tools.registry import tool_schema_strings
+
+    class RecordingBudget(ContextBudgetConfig):
+        """Record allocate kwargs for assertions."""
+
+        def __init__(self) -> None:
+            super().__init__(
+                counter=ApproximateTokenCounter(),
+                context_window_tokens=128000,
+                output_reserve_tokens=1024,
+                safety_margin_tokens=0,
+            )
+            self.calls: list[dict] = []
+
+        def allocate(self, question: str, **kwargs):
+            self.calls.append({"question": question, **kwargs})
+            return super().allocate(question, **kwargs)
+
+    client = FakeLLMClient(
+        structured_payload={
+            "answer": "ok",
+            "claims": [],
+            "insufficient_evidence": True,
+        }
+    )
+    # Fake without tool_turns falls back to structured via generate_tool_turn.
+    budget = RecordingBudget()
+    processor = LLMQuestionProcessor(
+        client,
+        budget=budget,
+        document_store=InMemoryDocumentStore([]),
+    )
+
+    await processor.process("req-1", "Short?", request_id="http-1")
+
+    assert len(budget.calls) == 1
+    assert budget.calls[0]["tool_schemas"] == tool_schema_strings(search_max_limit=5)
+
+
+@pytest.mark.asyncio
+async def test_processor_with_store_rejects_over_budget_before_tools(caplog):
+    """Over-budget fixed input fails before any tool turn when tools are enabled."""
+    from app.retrieval.memory import InMemoryDocumentStore
+
+    client = FakeLLMClient(
+        tool_turns=[
+            # Would fail the test if reached: empty script means unsupported.
+        ]
+    )
+    processor = LLMQuestionProcessor(
+        client,
+        budget=_tiny_budget(),
+        document_store=InMemoryDocumentStore([]),
+    )
+    caplog.set_level(logging.ERROR, logger="app.services.question_processor")
+
+    with pytest.raises(ContextBudgetExceededError):
+        await processor.process(
+            "req-over",
+            "This question is definitely too long for the tiny window",
+            request_id="http-over",
+        )
+
+    assert client.tool_turn_inputs == []
+
+
+@pytest.mark.asyncio
+async def test_processor_maps_tool_loop_bound_to_structured_error(caplog):
+    """Runaway tool loops surface as a controlled structured failure."""
+    from app.domain.tools import ToolCallProposal
+    from app.llm.generation import ToolTurnResult
+    from app.retrieval.memory import InMemoryDocumentStore
+
+    client = FakeLLMClient(
+        tool_turns=[
+            ToolTurnResult(
+                kind="tool_calls",
+                tool_calls=[
+                    ToolCallProposal(
+                        call_id=f"call-{i}",
+                        name="search_documents",
+                        arguments={"query": "x"},
+                    )
+                ],
+            )
+            for i in range(5)
+        ]
+    )
+    processor = LLMQuestionProcessor(
+        client,
+        document_store=InMemoryDocumentStore([]),
+        tool_max_turns=2,
+        tool_max_calls=10,
+    )
+    caplog.set_level(logging.ERROR, logger="app.services.question_processor")
+
+    with pytest.raises(StructuredOutputError) as raised:
+        await processor.process("req-loop", "loop", request_id="http-loop")
+
+    assert raised.value.category == "unsupported"
+    record = next(
+        item
+        for item in caplog.records
+        if item.message.startswith("Generation failed:")
+    )
+    assert record.error_category == "structured_output_unsupported"
