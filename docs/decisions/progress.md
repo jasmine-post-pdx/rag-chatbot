@@ -9,6 +9,33 @@ next steps as they stood at the time, not necessarily the current state.
 
 ---
 
+## 2026-11-22 — Safe read-only tool calls before vector retrieval
+
+**What I figured out**
+Step 5 added a `DocumentStore` protocol with an `InMemoryDocumentStore`,
+allow-listed `search_documents` / `get_document_chunk` tools, a
+`SafeToolExecutor` (validate, deadline, size cap, safe error observations),
+`LLMClient.generate_tool_turn`, and a bounded `ToolLoop`. The OpenAI question
+path runs the loop when a store is injected; the local path stays tool-free.
+Budgeting counts real tool schema strings. Public HTTP shape is unchanged;
+citations stay empty; `RetrievalMetrics` can reflect tool activity.
+
+**Why it matters**
+The model can look up documents under hard allow-list and loop bounds without
+shell/SQL/write tools, and without waiting for embeddings. Step 6 can replace
+the in-memory store behind the same interface.
+
+**Still fuzzy**
+- How classification filters will steer which tools or metadata filters run
+- Whether live OpenAI tool-calling latency will force a durable worker sooner
+
+**Next**
+Step 6 embeddings and retrieval; connect tools to a real vector-backed store.
+
+See also `docs/decisions/tools.md`.
+
+---
+
 ## 2026-11-20 — Typed model outputs before tools and retrieval
 
 **What I figured out**
@@ -33,6 +60,7 @@ silently breaking callers when the contract changes.
 
 **Next**
 Step 5 safe read-only tool calls (search/get chunk) with allow-listed tools.
+(Completed later; see the 2026-11-22 entry.)
 
 See also `docs/decisions/typed-outputs.md`.
 

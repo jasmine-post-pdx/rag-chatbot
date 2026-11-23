@@ -46,9 +46,9 @@ client
 | `app/config/` | Environment-based settings and logging configuration. |
 | `app/services/` | Question workflow, answer processors, and token/context budgeting. |
 | `app/stores/` | `QuestionJobStore` protocol and SQLite implementation. |
-| `app/llm/` | Provider-neutral async generation interfaces, OpenAI Responses adapter, and a fake client. |
-| `app/retrieval/` | Placeholder for chunking, indexing, search, ranking, and context assembly. |
-| `app/tools/` | Placeholder for optional tools the generator can call. |
+| `app/llm/` | Provider-neutral async generation and tool-turn interfaces, OpenAI Responses adapter, and a fake client. |
+| `app/retrieval/` | `DocumentStore` protocol and in-memory adapter; chunking/embeddings/vector search still ahead. |
+| `app/tools/` | Allow-listed read-only document tools, safe executor, and bounded tool loop. |
 | `scripts/` | Maintenance commands for SQLite backups, archives, and restore checks. |
 | `tests/unit/`, `tests/integration/` | Automated coverage for config, storage, processing, generation, and the HTTP API. |
 | `tests/evals/` | Placeholder for retrieval and answer-quality evaluations. |
@@ -56,9 +56,12 @@ client
 
 API handlers stay thin: they validate input, call the workflow, and map results
 to public schemas. Generation supports `local` (placeholder) and `openai`
-adapters. Retrieval is not wired yet. Processing failures are stored as failed
-jobs with `error_category: "processing_error"`; submission still returns a
-generic HTTP 500. More detail lives in [`docs/architecture.md`](docs/architecture.md).
+adapters. The OpenAI path can call allow-listed read-only document tools against
+an in-memory store; vector retrieval is still ahead. Processing failures are
+stored as failed jobs with `error_category: "processing_error"`; submission
+still returns a generic HTTP 500. More detail lives in
+[`docs/architecture.md`](docs/architecture.md) and
+[`docs/decisions/tools.md`](docs/decisions/tools.md).
 
 ## Stack
 
@@ -503,10 +506,10 @@ ruff check app tests
 
 The integration tests exercise the HTTP API through a dependency override
 backed by an in-memory SQLite store. Unit tests cover configuration, logging,
-job storage, the placeholder and LLM processors, token/context budgeting, the
-async generation adapters, and event-loop isolation when SQLite or generation
-is blocked or cancelled. `tests/evals/` is still a placeholder for retrieval
-and answer-quality tests.
+job storage, the placeholder and LLM processors, token/context budgeting,
+document tools and the bounded tool loop, the async generation adapters, and
+event-loop isolation when SQLite or generation is blocked or cancelled.
+`tests/evals/` is still a placeholder for retrieval and answer-quality tests.
 
 ## What's next
 
@@ -526,6 +529,8 @@ projects.
       event loop (Step 2.5).
 - [x] Add deterministic token/context budgeting before retrieval is wired
       (Step 3).
+- [x] Add allow-listed read-only document tools and a bounded tool loop
+      (Step 5).
 - [ ] Make question jobs durable across disconnects or restarts with a real
       pending/completed worker lifecycle when latency requires it.
 
