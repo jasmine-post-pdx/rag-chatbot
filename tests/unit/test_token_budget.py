@@ -305,3 +305,32 @@ def test_empty_chunks_returns_bare_question_prompt():
     assert allocation.selected_count == 0
     assert allocation.discarded_count == 0
     assert allocation.assembled_prompt == "What is RAG?"
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"context_window_tokens": 0}, "context_window_tokens must be greater than 0"),
+        ({"context_window_tokens": -1}, "context_window_tokens must be greater than 0"),
+        ({"output_reserve_tokens": 0}, "output_reserve_tokens must be greater than 0"),
+        ({"output_reserve_tokens": -1}, "output_reserve_tokens must be greater than 0"),
+        ({"safety_margin_tokens": -1}, "safety_margin_tokens must be zero or greater"),
+    ],
+)
+def test_allocate_context_budget_rejects_invalid_numeric_args(kwargs, match):
+    """Reject non-positive window/output reserve and negative safety margin.
+
+    :param kwargs: Invalid keyword override for ``allocate_context_budget``.
+    :param match: Expected ``ValueError`` message fragment."""
+    options = {
+        "context_window_tokens": 40,
+        "output_reserve_tokens": 5,
+        "safety_margin_tokens": 0,
+    }
+    options.update(kwargs)
+    with pytest.raises(ValueError, match=match):
+        allocate_context_budget(
+            BudgetRequest(question="q"),
+            counter=ExactTokenCounter(),
+            **options,
+        )

@@ -6,7 +6,7 @@ import pytest
 
 from app.domain.errors import ContextBudgetExceededError, StructuredOutputError
 from app.domain.model_outputs import AnswerClaim, AnswerV1
-from app.domain.questions import ModelMetrics, RetrievalMetrics
+from app.domain.questions import ModelMetrics, QuestionResult, RetrievalMetrics
 from app.llm import FakeLLMClient, StructuredGenerationResult
 from app.services.question_processor import (
     LLMQuestionProcessor,
@@ -94,14 +94,19 @@ async def test_processor_maps_structured_result_to_question_result():
     result = await processor.process("req-1", "What is RAG?")
 
     assert client.prompts == ["What is RAG?"]
-    assert result.question_id == "req-1"
-    assert result.answer == "A generated answer"
-    assert result.citations == []
-    assert result.model == ModelMetrics(
-        provider="test-provider",
-        name="test-model",
-        input_tokens=12,
-        output_tokens=34,
+    # Structured claims stay internal; the public result still has empty citations
+    # until retrieval grounding is wired.
+    assert result == QuestionResult(
+        question_id="req-1",
+        answer="A generated answer",
+        citations=[],
+        retrieval=RetrievalMetrics(documents_considered=0, chunks_returned=0),
+        model=ModelMetrics(
+            provider="test-provider",
+            name="test-model",
+            input_tokens=12,
+            output_tokens=34,
+        ),
     )
 
 

@@ -12,6 +12,22 @@ from app.domain.questions import QuestionJob
 from app.services.question_workflow import QuestionWorkflow
 from app.stores.sqlite import SQLiteQuestionJobStore
 
+
+def _assert_422_contract(response, *, expected_detail: str | None = None) -> None:
+    """Assert shared shape for client validation failures.
+
+    :param response: HTTP response from the test client.
+    :param expected_detail: Optional exact ``detail`` string to require."""
+    assert response.status_code == 422
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.headers["x-request-id"]
+    body = response.json()
+    assert set(body) == {"detail"}
+    assert isinstance(body["detail"], str)
+    if expected_detail is not None:
+        assert body["detail"] == expected_detail
+
+
 # /health
 
 
@@ -225,7 +241,7 @@ def test_submit_rejects_invalid_idempotency_key(client, key):
         "/v1/questions", json={"question": "Help"}, headers={"Idempotency-Key": key}
     )
 
-    assert response.status_code == 422
+    _assert_422_contract(response)
 
 
 def test_submit_trims_whitespace_from_question(client):
@@ -240,68 +256,78 @@ def test_submit_rejects_missing_question_field(client):
     """Verify a missing question field returns a field-required error."""
     response = client.post("/v1/questions", json={})
 
-    assert response.status_code == 422
-    assert response.json() == {"detail": "Invalid request: question: Field required"}
+    _assert_422_contract(
+        response,
+        expected_detail="Invalid request: question: Field required",
+    )
 
 
 def test_submit_rejects_empty_question(client):
     """Verify an empty question string returns a minimum-length error."""
     response = client.post("/v1/questions", json={"question": ""})
 
-    assert response.status_code == 422
-    assert response.json() == {
-        "detail": "Invalid request: question: String should have at least 1 character"
-    }
+    _assert_422_contract(
+        response,
+        expected_detail=(
+            "Invalid request: question: String should have at least 1 character"
+        ),
+    )
 
 
 def test_submit_rejects_whitespace_question(client):
     """Verify a whitespace-only question returns a minimum-length error."""
     response = client.post("/v1/questions", json={"question": " "})
 
-    assert response.status_code == 422
-    assert response.json() == {
-        "detail": "Invalid request: question: String should have at least 1 character"
-    }
+    _assert_422_contract(
+        response,
+        expected_detail=(
+            "Invalid request: question: String should have at least 1 character"
+        ),
+    )
 
 
 def test_submit_rejects_question_with_only_tabs_and_newlines(client):
     """Verify a question of only tabs/newlines returns a minimum-length error."""
     response = client.post("/v1/questions", json={"question": "\t\n"})
 
-    assert response.status_code == 422
-    assert response.json() == {
-        "detail": "Invalid request: question: String should have at least 1 character"
-    }
+    _assert_422_contract(
+        response,
+        expected_detail=(
+            "Invalid request: question: String should have at least 1 character"
+        ),
+    )
 
 
 def test_submit_rejects_question_that_is_too_long(client):
     """Verify a question over the max length returns a maximum-length error."""
     response = client.post("/v1/questions", json={"question": "x" * 4001})
 
-    assert response.status_code == 422
-    assert response.json() == {
-        "detail": "Invalid request: question: String should have at most 4000 characters"
-    }
+    _assert_422_contract(
+        response,
+        expected_detail=(
+            "Invalid request: question: String should have at most 4000 characters"
+        ),
+    )
 
 
 def test_submit_rejects_non_string_question(client):
     """Verify a non-string question returns a type error."""
     response = client.post("/v1/questions", json={"question": 42})
 
-    assert response.status_code == 422
-    assert response.json() == {
-        "detail": "Invalid request: question: Input should be a valid string"
-    }
+    _assert_422_contract(
+        response,
+        expected_detail="Invalid request: question: Input should be a valid string",
+    )
 
 
 def test_submit_rejects_null_question(client):
     """Verify a null question returns a type error."""
     response = client.post("/v1/questions", json={"question": None})
 
-    assert response.status_code == 422
-    assert response.json() == {
-        "detail": "Invalid request: question: Input should be a valid string"
-    }
+    _assert_422_contract(
+        response,
+        expected_detail="Invalid request: question: Input should be a valid string",
+    )
 
 
 def test_submit_rejects_malformed_json(client):
@@ -310,10 +336,10 @@ def test_submit_rejects_malformed_json(client):
         "/v1/questions", content='{"question":', headers={"content-type": "application/json"}
     )
 
-    assert response.status_code == 422
-    body = response.json()
-    assert set(body) == {"detail"}
-    assert body["detail"] == "Invalid request: 12: JSON decode error"
+    _assert_422_contract(
+        response,
+        expected_detail="Invalid request: 12: JSON decode error",
+    )
 
 
 @pytest.mark.parametrize(
@@ -329,10 +355,7 @@ def test_submit_rejects_non_object_json_bodies(client, body, expected_detail):
     """Verify valid JSON with a non-object root is rejected with a structured 422 response."""
     response = client.post("/v1/questions", json=body)
 
-    assert response.status_code == 422
-    response_body = response.json()
-    assert set(response_body) == {"detail"}
-    assert response_body["detail"] == expected_detail
+    _assert_422_contract(response, expected_detail=expected_detail)
 
 
 def test_poll_unknown_question_is_404(client):
