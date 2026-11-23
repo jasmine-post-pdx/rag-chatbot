@@ -44,8 +44,15 @@ async def test_openai_responses_api_smoke():
     )
     result = await client.generate("Reply with a short greeting.")
 
+    assert isinstance(result.answer, str)
     assert result.answer.strip()
+    assert len(result.answer) < 8_000
     assert result.provider == "openai"
-    assert result.model
+    assert isinstance(result.model, str) and result.model
+    assert result.finish_status in {None, "completed", "incomplete"}
+    assert result.refusal is None
+    assert result.provider_request_id is None or (
+        isinstance(result.provider_request_id, str) and result.provider_request_id
+    )
     assert result.input_tokens is None or result.input_tokens >= 0
     assert result.output_tokens is None or result.output_tokens >= 0

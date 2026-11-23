@@ -12,10 +12,18 @@ from app.schemas.questions import QuestionResultResponse
 
 
 def test_full_openapi_contract_fingerprint():
-    """Preserve the complete canonical OpenAPI document across runtime extraction."""
+    """Preserve the complete canonical OpenAPI document across runtime extraction.
+
+    On failure, re-run locally, inspect ``app.openapi()`` / named schema tests,
+    then update this hash only when the contract change is intentional.
+    Human-readable anchors live in ``test_question_openapi_contract``.
+    """
     canonical = json.dumps(app.openapi(), sort_keys=True, separators=(",", ":"))
-    assert hashlib.sha256(canonical.encode()).hexdigest() == (
-        "0fea1fade988d0f091912d11917bdb05cb24828d11ab203833010402e76fb12c"
+    digest = hashlib.sha256(canonical.encode()).hexdigest()
+    expected = "0fea1fade988d0f091912d11917bdb05cb24828d11ab203833010402e76fb12c"
+    assert digest == expected, (
+        f"OpenAPI fingerprint changed ({digest}); update only after reviewing "
+        "contract diffs and named schema assertions"
     )
 
 

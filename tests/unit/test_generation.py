@@ -88,7 +88,24 @@ async def test_llm_client_uses_structural_generate_interface():
     client: LLMClient = FakeClient()
 
     result = await client.generate("What is RAG?")
-    assert result.answer == "Answer to: What is RAG?"
+    assert result == GenerationResult(
+        answer="Answer to: What is RAG?",
+        provider="test-provider",
+        model="test-model",
+        input_tokens=3,
+        output_tokens=5,
+    )
+
+    structured = await client.generate_structured("What is RAG?", AnswerV1)
+    assert structured.parsed == AnswerV1(
+        answer="Structured: What is RAG?",
+        claims=[],
+        insufficient_evidence=True,
+    )
+    assert structured.provider == "test-provider"
+    assert structured.model == "test-model"
+    assert structured.input_tokens == 3
+    assert structured.output_tokens == 5
 
 
 def _valid_answer_payload() -> dict:
