@@ -1,7 +1,7 @@
 """LLM, embedding, and related model adapters.
 
-Generation clients expose async ``generate`` and ``generate_structured`` methods
-that callers must await.
+Generation clients expose async ``generate``, ``generate_structured``, and
+``generate_tool_turn`` methods that callers must await.
 """
 
 from app.llm.generation import (
@@ -11,6 +11,7 @@ from app.llm.generation import (
     MissingAPIKeyError,
     OpenAIResponsesClient,
     StructuredGenerationResult,
+    ToolTurnResult,
 )
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "MissingAPIKeyError",
     "OpenAIResponsesClient",
     "StructuredGenerationResult",
+    "ToolTurnResult",
 ]
