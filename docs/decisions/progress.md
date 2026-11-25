@@ -9,6 +9,33 @@ next steps as they stood at the time, not necessarily the current state.
 
 ---
 
+## 2026-11-25 — Chunking experiment
+
+**What I figured out**
+Step 7 added `ChunkingStrategy` / `ChunkingConfig` (recursive character,
+token-aware, structure-aware), wired strategies through ingestion/seeding via
+`CHUNKING_STRATEGY`, and shipped an isolated experiment harness plus
+`python -m scripts.chunking_experiment`. The recorded fake-embedder run on
+`data/raw` tied all three strategies at 30/30 answer-bearing hits, so production
+keeps `recursive_character` until a larger corpus or live embeddings shows a
+difference. Results live in `docs/evals/chunking-experiment-results.json` and
+`docs/decisions/chunking.md`.
+
+**Why it matters**
+Chunking choices stay comparable without touching the live `documents` index,
+and the decision is tied to actual metrics instead of intuition.
+
+**Still fuzzy**
+- Whether structure-aware wins once sources are long enough to split
+- How MiniLM ranking would reorder the same 30 queries across strategies
+
+**Next**
+Step 8 retrieval-grounded answers.
+
+See also `docs/decisions/chunking.md`.
+
+---
+
 ## 2026-11-24 — Embeddings and retrieval
 
 **What I figured out**
@@ -32,6 +59,7 @@ serving stale chunks when a source changes.
 
 **Next**
 Step 7 chunking experiment; then Step 8 retrieval-grounded answers.
+(Step 7 completed later; see the 2026-11-25 entry.)
 
 See also `docs/decisions/embeddings-retrieval.md` and
 `docs/evals/retrieval-inspection.md`.

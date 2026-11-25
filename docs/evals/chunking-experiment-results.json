@@ -1,0 +1,1209 @@
+{
+  "embedding_model": "fake-embed",
+  "top_k": 5,
+  "budget_token_limit": 500,
+  "vector_collection": "chunking_experiment",
+  "collection": "chunking_experiment",
+  "results_by_strategy": {
+    "recursive_character": {
+      "settings": {
+        "strategy": "recursive_character",
+        "chunk_size": 500,
+        "chunk_overlap": 50
+      },
+      "chunk_count": 4,
+      "query_metrics": {
+        "q01": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "express-guide:0",
+            "fastapi-lifespan:0",
+            "fastapi-guide:0",
+            "rag-budget:0"
+          ]
+        },
+        "q02": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-lifespan:0",
+            "rag-budget:0",
+            "express-guide:0",
+            "fastapi-guide:0"
+          ]
+        },
+        "q03": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-lifespan:0",
+            "fastapi-guide:0",
+            "rag-budget:0",
+            "express-guide:0"
+          ]
+        },
+        "q04": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-guide:0",
+            "fastapi-lifespan:0",
+            "rag-budget:0",
+            "express-guide:0"
+          ]
+        },
+        "q05": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-lifespan:0",
+            "rag-budget:0",
+            "express-guide:0",
+            "fastapi-guide:0"
+          ]
+        },
+        "q06": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "rag-budget:0",
+            "fastapi-lifespan:0",
+            "fastapi-guide:0",
+            "express-guide:0"
+          ]
+        },
+        "q07": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-lifespan:0",
+            "rag-budget:0",
+            "express-guide:0",
+            "fastapi-guide:0"
+          ]
+        },
+        "q08": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "rag-budget:0",
+            "fastapi-lifespan:0",
+            "fastapi-guide:0",
+            "express-guide:0"
+          ]
+        },
+        "q09": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "rag-budget:0",
+            "express-guide:0",
+            "fastapi-lifespan:0",
+            "fastapi-guide:0"
+          ]
+        },
+        "q10": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "rag-budget:0",
+            "fastapi-guide:0",
+            "fastapi-lifespan:0",
+            "express-guide:0"
+          ]
+        },
+        "q11": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "express-guide:0",
+            "rag-budget:0",
+            "fastapi-lifespan:0",
+            "fastapi-guide:0"
+          ]
+        },
+        "q12": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "express-guide:0",
+            "fastapi-lifespan:0",
+            "fastapi-guide:0",
+            "rag-budget:0"
+          ]
+        },
+        "q13": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "express-guide:0",
+            "fastapi-guide:0",
+            "fastapi-lifespan:0",
+            "rag-budget:0"
+          ]
+        },
+        "q14": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-guide:0",
+            "express-guide:0",
+            "rag-budget:0",
+            "fastapi-lifespan:0"
+          ]
+        },
+        "q15": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "express-guide:0",
+            "rag-budget:0",
+            "fastapi-lifespan:0",
+            "fastapi-guide:0"
+          ]
+        },
+        "q16": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "rag-budget:0",
+            "fastapi-guide:0",
+            "fastapi-lifespan:0",
+            "express-guide:0"
+          ]
+        },
+        "q17": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "rag-budget:0",
+            "fastapi-lifespan:0",
+            "express-guide:0",
+            "fastapi-guide:0"
+          ]
+        },
+        "q18": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-lifespan:0",
+            "fastapi-guide:0",
+            "rag-budget:0",
+            "express-guide:0"
+          ]
+        },
+        "q19": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-guide:0",
+            "express-guide:0",
+            "rag-budget:0",
+            "fastapi-lifespan:0"
+          ]
+        },
+        "q20": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "express-guide:0",
+            "rag-budget:0",
+            "fastapi-lifespan:0",
+            "fastapi-guide:0"
+          ]
+        },
+        "q21": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "rag-budget:0",
+            "fastapi-guide:0",
+            "fastapi-lifespan:0",
+            "express-guide:0"
+          ]
+        },
+        "q22": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-guide:0",
+            "fastapi-lifespan:0",
+            "rag-budget:0",
+            "express-guide:0"
+          ]
+        },
+        "q23": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-lifespan:0",
+            "fastapi-guide:0",
+            "rag-budget:0",
+            "express-guide:0"
+          ]
+        },
+        "q24": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "rag-budget:0",
+            "fastapi-lifespan:0",
+            "express-guide:0",
+            "fastapi-guide:0"
+          ]
+        },
+        "q25": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "express-guide:0",
+            "fastapi-guide:0",
+            "fastapi-lifespan:0",
+            "rag-budget:0"
+          ]
+        },
+        "q26": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-guide:0",
+            "express-guide:0",
+            "fastapi-lifespan:0",
+            "rag-budget:0"
+          ]
+        },
+        "q27": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "rag-budget:0",
+            "fastapi-lifespan:0",
+            "express-guide:0",
+            "fastapi-guide:0"
+          ]
+        },
+        "q28": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-guide:0",
+            "fastapi-lifespan:0",
+            "express-guide:0",
+            "rag-budget:0"
+          ]
+        },
+        "q29": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "express-guide:0",
+            "fastapi-lifespan:0",
+            "fastapi-guide:0",
+            "rag-budget:0"
+          ]
+        },
+        "q30": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "rag-budget:0",
+            "fastapi-lifespan:0",
+            "express-guide:0",
+            "fastapi-guide:0"
+          ]
+        }
+      }
+    },
+    "token_aware": {
+      "settings": {
+        "strategy": "token_aware",
+        "chunk_size": 125,
+        "chunk_overlap": 12
+      },
+      "chunk_count": 4,
+      "query_metrics": {
+        "q01": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "express-guide:0",
+            "fastapi-lifespan:0",
+            "fastapi-guide:0",
+            "rag-budget:0"
+          ]
+        },
+        "q02": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-lifespan:0",
+            "rag-budget:0",
+            "express-guide:0",
+            "fastapi-guide:0"
+          ]
+        },
+        "q03": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-lifespan:0",
+            "fastapi-guide:0",
+            "rag-budget:0",
+            "express-guide:0"
+          ]
+        },
+        "q04": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-guide:0",
+            "fastapi-lifespan:0",
+            "rag-budget:0",
+            "express-guide:0"
+          ]
+        },
+        "q05": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-lifespan:0",
+            "rag-budget:0",
+            "express-guide:0",
+            "fastapi-guide:0"
+          ]
+        },
+        "q06": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "rag-budget:0",
+            "fastapi-lifespan:0",
+            "fastapi-guide:0",
+            "express-guide:0"
+          ]
+        },
+        "q07": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-lifespan:0",
+            "rag-budget:0",
+            "express-guide:0",
+            "fastapi-guide:0"
+          ]
+        },
+        "q08": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "rag-budget:0",
+            "fastapi-lifespan:0",
+            "fastapi-guide:0",
+            "express-guide:0"
+          ]
+        },
+        "q09": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "rag-budget:0",
+            "express-guide:0",
+            "fastapi-lifespan:0",
+            "fastapi-guide:0"
+          ]
+        },
+        "q10": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "rag-budget:0",
+            "fastapi-guide:0",
+            "fastapi-lifespan:0",
+            "express-guide:0"
+          ]
+        },
+        "q11": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "express-guide:0",
+            "rag-budget:0",
+            "fastapi-lifespan:0",
+            "fastapi-guide:0"
+          ]
+        },
+        "q12": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "express-guide:0",
+            "fastapi-lifespan:0",
+            "fastapi-guide:0",
+            "rag-budget:0"
+          ]
+        },
+        "q13": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "express-guide:0",
+            "fastapi-guide:0",
+            "fastapi-lifespan:0",
+            "rag-budget:0"
+          ]
+        },
+        "q14": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-guide:0",
+            "express-guide:0",
+            "rag-budget:0",
+            "fastapi-lifespan:0"
+          ]
+        },
+        "q15": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "express-guide:0",
+            "rag-budget:0",
+            "fastapi-lifespan:0",
+            "fastapi-guide:0"
+          ]
+        },
+        "q16": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "rag-budget:0",
+            "fastapi-guide:0",
+            "fastapi-lifespan:0",
+            "express-guide:0"
+          ]
+        },
+        "q17": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "rag-budget:0",
+            "fastapi-lifespan:0",
+            "express-guide:0",
+            "fastapi-guide:0"
+          ]
+        },
+        "q18": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-lifespan:0",
+            "fastapi-guide:0",
+            "rag-budget:0",
+            "express-guide:0"
+          ]
+        },
+        "q19": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-guide:0",
+            "express-guide:0",
+            "rag-budget:0",
+            "fastapi-lifespan:0"
+          ]
+        },
+        "q20": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "express-guide:0",
+            "rag-budget:0",
+            "fastapi-lifespan:0",
+            "fastapi-guide:0"
+          ]
+        },
+        "q21": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "rag-budget:0",
+            "fastapi-guide:0",
+            "fastapi-lifespan:0",
+            "express-guide:0"
+          ]
+        },
+        "q22": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-guide:0",
+            "fastapi-lifespan:0",
+            "rag-budget:0",
+            "express-guide:0"
+          ]
+        },
+        "q23": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-lifespan:0",
+            "fastapi-guide:0",
+            "rag-budget:0",
+            "express-guide:0"
+          ]
+        },
+        "q24": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "rag-budget:0",
+            "fastapi-lifespan:0",
+            "express-guide:0",
+            "fastapi-guide:0"
+          ]
+        },
+        "q25": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "express-guide:0",
+            "fastapi-guide:0",
+            "fastapi-lifespan:0",
+            "rag-budget:0"
+          ]
+        },
+        "q26": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-guide:0",
+            "express-guide:0",
+            "fastapi-lifespan:0",
+            "rag-budget:0"
+          ]
+        },
+        "q27": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "rag-budget:0",
+            "fastapi-lifespan:0",
+            "express-guide:0",
+            "fastapi-guide:0"
+          ]
+        },
+        "q28": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-guide:0",
+            "fastapi-lifespan:0",
+            "express-guide:0",
+            "rag-budget:0"
+          ]
+        },
+        "q29": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "express-guide:0",
+            "fastapi-lifespan:0",
+            "fastapi-guide:0",
+            "rag-budget:0"
+          ]
+        },
+        "q30": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "rag-budget:0",
+            "fastapi-lifespan:0",
+            "express-guide:0",
+            "fastapi-guide:0"
+          ]
+        }
+      }
+    },
+    "structure_aware": {
+      "settings": {
+        "strategy": "structure_aware",
+        "chunk_size": 500,
+        "chunk_overlap": 50
+      },
+      "chunk_count": 4,
+      "query_metrics": {
+        "q01": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "express-guide:0",
+            "fastapi-lifespan:0",
+            "fastapi-guide:0",
+            "rag-budget:0"
+          ]
+        },
+        "q02": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-lifespan:0",
+            "rag-budget:0",
+            "express-guide:0",
+            "fastapi-guide:0"
+          ]
+        },
+        "q03": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-lifespan:0",
+            "fastapi-guide:0",
+            "rag-budget:0",
+            "express-guide:0"
+          ]
+        },
+        "q04": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-guide:0",
+            "fastapi-lifespan:0",
+            "rag-budget:0",
+            "express-guide:0"
+          ]
+        },
+        "q05": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-lifespan:0",
+            "rag-budget:0",
+            "express-guide:0",
+            "fastapi-guide:0"
+          ]
+        },
+        "q06": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "rag-budget:0",
+            "fastapi-lifespan:0",
+            "fastapi-guide:0",
+            "express-guide:0"
+          ]
+        },
+        "q07": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-lifespan:0",
+            "rag-budget:0",
+            "express-guide:0",
+            "fastapi-guide:0"
+          ]
+        },
+        "q08": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "rag-budget:0",
+            "fastapi-lifespan:0",
+            "fastapi-guide:0",
+            "express-guide:0"
+          ]
+        },
+        "q09": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "rag-budget:0",
+            "express-guide:0",
+            "fastapi-lifespan:0",
+            "fastapi-guide:0"
+          ]
+        },
+        "q10": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "rag-budget:0",
+            "fastapi-guide:0",
+            "fastapi-lifespan:0",
+            "express-guide:0"
+          ]
+        },
+        "q11": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "express-guide:0",
+            "rag-budget:0",
+            "fastapi-lifespan:0",
+            "fastapi-guide:0"
+          ]
+        },
+        "q12": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "express-guide:0",
+            "fastapi-lifespan:0",
+            "fastapi-guide:0",
+            "rag-budget:0"
+          ]
+        },
+        "q13": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "express-guide:0",
+            "fastapi-guide:0",
+            "fastapi-lifespan:0",
+            "rag-budget:0"
+          ]
+        },
+        "q14": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-guide:0",
+            "express-guide:0",
+            "rag-budget:0",
+            "fastapi-lifespan:0"
+          ]
+        },
+        "q15": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "express-guide:0",
+            "rag-budget:0",
+            "fastapi-lifespan:0",
+            "fastapi-guide:0"
+          ]
+        },
+        "q16": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "rag-budget:0",
+            "fastapi-guide:0",
+            "fastapi-lifespan:0",
+            "express-guide:0"
+          ]
+        },
+        "q17": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "rag-budget:0",
+            "fastapi-lifespan:0",
+            "express-guide:0",
+            "fastapi-guide:0"
+          ]
+        },
+        "q18": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-lifespan:0",
+            "fastapi-guide:0",
+            "rag-budget:0",
+            "express-guide:0"
+          ]
+        },
+        "q19": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-guide:0",
+            "express-guide:0",
+            "rag-budget:0",
+            "fastapi-lifespan:0"
+          ]
+        },
+        "q20": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "express-guide:0",
+            "rag-budget:0",
+            "fastapi-lifespan:0",
+            "fastapi-guide:0"
+          ]
+        },
+        "q21": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "rag-budget:0",
+            "fastapi-guide:0",
+            "fastapi-lifespan:0",
+            "express-guide:0"
+          ]
+        },
+        "q22": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-guide:0",
+            "fastapi-lifespan:0",
+            "rag-budget:0",
+            "express-guide:0"
+          ]
+        },
+        "q23": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-lifespan:0",
+            "fastapi-guide:0",
+            "rag-budget:0",
+            "express-guide:0"
+          ]
+        },
+        "q24": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "rag-budget:0",
+            "fastapi-lifespan:0",
+            "express-guide:0",
+            "fastapi-guide:0"
+          ]
+        },
+        "q25": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "express-guide:0",
+            "fastapi-guide:0",
+            "fastapi-lifespan:0",
+            "rag-budget:0"
+          ]
+        },
+        "q26": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-guide:0",
+            "express-guide:0",
+            "fastapi-lifespan:0",
+            "rag-budget:0"
+          ]
+        },
+        "q27": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "rag-budget:0",
+            "fastapi-lifespan:0",
+            "express-guide:0",
+            "fastapi-guide:0"
+          ]
+        },
+        "q28": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "fastapi-guide:0",
+            "fastapi-lifespan:0",
+            "express-guide:0",
+            "rag-budget:0"
+          ]
+        },
+        "q29": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "express-guide:0",
+            "fastapi-lifespan:0",
+            "fastapi-guide:0",
+            "rag-budget:0"
+          ]
+        },
+        "q30": {
+          "answer_bearing_in_top_k": true,
+          "standalone_coherence": true,
+          "citation_clarity": true,
+          "context_budget_fit": true,
+          "near_duplicate_crowding": 0.0,
+          "hit_chunk_ids": [
+            "rag-budget:0",
+            "fastapi-lifespan:0",
+            "express-guide:0",
+            "fastapi-guide:0"
+          ]
+        }
+      }
+    }
+  }
+}
