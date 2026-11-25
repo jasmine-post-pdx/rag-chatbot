@@ -454,6 +454,9 @@ the SQLite store until the retrieval layer is wired up.
   list on the non-tool path so oversized fixed input fails before a provider call.
 - `POST /v1/search` is retrieval-only. Ingest sample markdown with
   `python -m scripts.ingest` (or rely on lifespan seeding of `data/raw`).
+  Compare chunking strategies on an isolated in-memory index with
+  `python -m scripts.chunking_experiment --path data/raw --output docs/evals/chunking-experiment-results.json`
+  (never clears the live `documents` collection).
 - `POST /v1/questions` still finishes in one request: it awaits generation,
   persists the completed or failed job, and returns. SQLite work is offloaded
   off the event loop. In-flight work is not persisted; the status endpoint
