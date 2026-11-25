@@ -1,16 +1,18 @@
 """Provider-neutral interfaces and models for text generation."""
 
 import asyncio
+import json
 import logging
 import random
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import Generic, Protocol, TypeVar
+from typing import Any, Generic, Literal, Protocol, TypeVar
 
 from pydantic import BaseModel, Field, ValidationError
 
 from app.domain.errors import StructuredOutputError
+from app.domain.tools import ToolCallProposal
 
 logger = logging.getLogger(__name__)
 
@@ -82,11 +84,25 @@ class StructuredGenerationResult(Generic[TModel]):
     provider_request_id: str | None = None
 
 
+@dataclass(frozen=True)
+class ToolTurnResult(Generic[TModel]):
+    """One model turn that either proposes tool calls or returns structured output.
+
+    :ivar kind: ``"tool_calls"`` when the model requested tools, else ``"structured"``.
+    :ivar tool_calls: Proposed tool calls when ``kind`` is ``"tool_calls"``.
+    :ivar structured: Final structured result when ``kind`` is ``"structured"``."""
+
+    kind: Literal["tool_calls", "structured"]
+    tool_calls: list[ToolCallProposal] | None = None
+    structured: StructuredGenerationResult[TModel] | None = None
+
+
 class LLMClient(Protocol):
     """Interface implemented by language model generation clients.
 
     Implementations return provider-reported token usage with each answer.
-    Callers must await ``generate`` and ``generate_structured``.
+    Callers must await ``generate``, ``generate_structured``, and
+    ``generate_tool_turn``.
     """
 
     async def generate(self, question: str) -> GenerationResult:
@@ -109,6 +125,21 @@ class LLMClient(Protocol):
         :raises StructuredOutputError: On refusal, incomplete, or invalid output."""
         ...
 
+    async def generate_tool_turn(
+        self,
+        input_items: str | Sequence[object],
+        tools: Sequence[dict[str, Any]],
+        output_model: type[TModel],
+    ) -> ToolTurnResult[TModel]:
+        """Run one tool-enabled turn returning tool calls or structured output.
+
+        :param input_items: Prompt string or multi-turn Responses input items.
+        :param tools: Allow-listed tool definitions sent to the provider.
+        :param output_model: Pydantic model for a final structured answer.
+        :returns: Either proposed tool calls or a validated structured result.
+        :raises StructuredOutputError: On refusal, incomplete, or invalid output."""
+        ...
+
 
 class FakeLLMClient:
     """Return deterministic responses without contacting a model provider.
@@ -118,7 +149,8 @@ class FakeLLMClient:
         ``generate_structured`` after local validation.
     :ivar _structured_refusal: When set, structured generation fails as refusal.
     :ivar _structured_incomplete: When true, structured generation fails as incomplete.
-    :ivar _structured_finish_status: Finish status reported on structured success."""
+    :ivar _structured_finish_status: Finish status reported on structured success.
+    :ivar _tool_turns: Scripted sequence consumed by ``generate_tool_turn``."""
 
     def __init__(
         self,
@@ -128,6 +160,7 @@ class FakeLLMClient:
         structured_refusal: str | None = None,
         structured_incomplete: bool = False,
         structured_finish_status: str | None = "completed",
+        tool_turns: list[ToolTurnResult] | None = None,
     ) -> None:
         """Initialize the fake client.
 
@@ -138,13 +171,17 @@ class FakeLLMClient:
             refusal ``StructuredOutputError``.
         :param structured_incomplete: When true, ``generate_structured`` raises
             an incomplete ``StructuredOutputError``.
-        :param structured_finish_status: Finish status on structured success."""
+        :param structured_finish_status: Finish status on structured success.
+        :param tool_turns: Optional scripted tool-turn sequence. Each
+            ``generate_tool_turn`` call consumes the next entry."""
         self.model = model
         self.provider = "fake"
         self._structured_payload = structured_payload
         self._structured_refusal = structured_refusal
         self._structured_incomplete = structured_incomplete
         self._structured_finish_status = structured_finish_status
+        self._tool_turns = list(tool_turns) if tool_turns is not None else None
+        self.tool_turn_inputs: list[object] = []
 
     async def generate(self, question: str) -> GenerationResult:
         """Return a stable answer without making a provider request.
@@ -209,6 +246,34 @@ class FakeLLMClient:
             output_tokens=0,
             finish_status=self._structured_finish_status,
         )
+
+    async def generate_tool_turn(
+        self,
+        input_items: str | Sequence[object],
+        tools: Sequence[dict[str, Any]],
+        output_model: type[TModel],
+    ) -> ToolTurnResult[TModel]:
+        """Return the next scripted tool turn, or fail when the script is empty.
+
+        :param input_items: Prompt or conversation items; recorded for assertions.
+        :param tools: Tool definitions; unused except to satisfy the interface.
+        :param output_model: Expected final structured model type.
+        :returns: The next scripted ``ToolTurnResult``.
+        :raises StructuredOutputError: When no scripted turns remain."""
+        del tools  # Interface parity with real clients.
+        self.tool_turn_inputs.append(input_items)
+        if self._tool_turns is None:
+            structured = await self.generate_structured(
+                input_items if isinstance(input_items, str) else str(input_items),
+                output_model,
+            )
+            return ToolTurnResult(kind="structured", structured=structured)
+        if not self._tool_turns:
+            raise StructuredOutputError(
+                "unsupported",
+                "FakeLLMClient has no remaining scripted tool turns",
+            )
+        return self._tool_turns.pop(0)
 
 
 class MissingAPIKeyError(RuntimeError):
@@ -313,10 +378,10 @@ class OpenAIResponsesClient:
             )
         return self._client
 
-    def _request_body(self, question: str) -> dict[str, object]:
+    def _request_body(self, question: str | Sequence[object]) -> dict[str, object]:
         """Build the Responses API request from the question and client settings.
 
-        :param question: User question sent as the request input.
+        :param question: User question or multi-turn input items for the request.
         :returns: Request fields. Instructions and the output cap are included only
             when configured."""
         body: dict[str, object] = {"model": self._model, "input": question}
@@ -424,6 +489,88 @@ class OpenAIResponsesClient:
 
         response = await self._with_retries(_parse)
         return _structured_generation_result(response, self._model, output_model)
+
+    async def generate_tool_turn(
+        self,
+        input_items: str | Sequence[object],
+        tools: Sequence[dict[str, Any]],
+        output_model: type[TModel],
+    ) -> ToolTurnResult[TModel]:
+        """Run one Responses turn with tools, returning calls or structured output.
+
+        Prefers ``responses.parse`` with ``text_format`` so a final answer can be
+        schema-constrained. When the provider returns ``function_call`` items,
+        those are mapped to ``ToolCallProposal`` values instead.
+
+        :param input_items: Prompt string or multi-turn Responses input items.
+        :param tools: Allow-listed tool definitions included in the request.
+        :param output_model: Pydantic model for a final structured answer.
+        :returns: Tool-call proposals or a locally validated structured result.
+        :raises MissingAPIKeyError: If ``OPENAI_API_KEY`` is not set.
+        :raises StructuredOutputError: On refusal, incomplete, malformed tool
+            arguments, or invalid structured output.
+        :raises Exception: Retryable provider errors after retries are exhausted."""
+        client = self._get_client()
+        body = self._request_body(input_items)
+        body["tools"] = list(tools)
+        parse = getattr(client.responses, "parse", None)
+        if not callable(parse):
+            raise StructuredOutputError(
+                "unsupported",
+                "Provider client does not support schema-constrained responses.parse",
+            )
+
+        async def _parse() -> object:
+            return await parse(**body, text_format=output_model)
+
+        response = await self._with_retries(_parse)
+        proposals = _tool_call_proposals(response)
+        if proposals:
+            return ToolTurnResult(kind="tool_calls", tool_calls=proposals)
+        structured = _structured_generation_result(response, self._model, output_model)
+        return ToolTurnResult(kind="structured", structured=structured)
+
+
+def _tool_call_proposals(response: object) -> list[ToolCallProposal]:
+    """Extract function_call items from a Responses API output list.
+
+    :param response: Provider response object or mapping.
+    :returns: Proposed tool calls in output order.
+    :raises StructuredOutputError: When a function_call has malformed arguments."""
+    output = getattr(response, "output", None)
+    if output is None and isinstance(response, dict):
+        output = response.get("output")
+    if not output:
+        return []
+
+    proposals: list[ToolCallProposal] = []
+    for item in output:
+        item_type = _mapping_or_attr(item, "type")
+        if item_type != "function_call":
+            continue
+        call_id = _mapping_or_attr(item, "call_id")
+        name = _mapping_or_attr(item, "name")
+        raw_arguments = _mapping_or_attr(item, "arguments")
+        if not isinstance(call_id, str) or not call_id:
+            raise StructuredOutputError("validation", "Tool call missing call_id")
+        if not isinstance(name, str) or not name:
+            raise StructuredOutputError("validation", "Tool call missing name")
+        if isinstance(raw_arguments, dict):
+            arguments = raw_arguments
+        elif isinstance(raw_arguments, str):
+            try:
+                parsed_args = json.loads(raw_arguments)
+            except json.JSONDecodeError as exc:
+                raise StructuredOutputError("validation") from exc
+            if not isinstance(parsed_args, dict):
+                raise StructuredOutputError("validation")
+            arguments = parsed_args
+        else:
+            raise StructuredOutputError("validation")
+        proposals.append(
+            ToolCallProposal(call_id=call_id, name=name, arguments=arguments)
+        )
+    return proposals
 
 
 def _generation_result(response: object, fallback_model: str) -> GenerationResult:

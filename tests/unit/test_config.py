@@ -56,6 +56,11 @@ def test_generation_client_settings_use_current_client_defaults(monkeypatch):
         "GENERATION_BUDGET_SAFETY_MARGIN_TOKENS",
         "GENERATION_BUDGET_DEBUG",
         "GENERATION_INSTRUCTIONS",
+        "TOOL_SEARCH_MAX_LIMIT",
+        "TOOL_CALL_TIMEOUT_SECONDS",
+        "TOOL_MAX_RESULT_CHARS",
+        "TOOL_MAX_TURNS",
+        "TOOL_MAX_CALLS",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -68,6 +73,11 @@ def test_generation_client_settings_use_current_client_defaults(monkeypatch):
     assert settings.generation_budget_safety_margin_tokens == 256
     assert settings.generation_budget_debug is False
     assert settings.generation_instructions is None
+    assert settings.tool_search_max_limit == 5
+    assert settings.tool_call_timeout_seconds == 2.0
+    assert settings.tool_max_result_chars == 4000
+    assert settings.tool_max_turns == 3
+    assert settings.tool_max_calls == 6
 
 
 def test_generation_client_settings_load_from_environment(monkeypatch):
@@ -81,6 +91,11 @@ def test_generation_client_settings_load_from_environment(monkeypatch):
     monkeypatch.setenv("GENERATION_BUDGET_SAFETY_MARGIN_TOKENS", "64")
     monkeypatch.setenv("GENERATION_BUDGET_DEBUG", "true")
     monkeypatch.setenv("GENERATION_INSTRUCTIONS", "  Be concise.  ")
+    monkeypatch.setenv("TOOL_SEARCH_MAX_LIMIT", "3")
+    monkeypatch.setenv("TOOL_CALL_TIMEOUT_SECONDS", "1.5")
+    monkeypatch.setenv("TOOL_MAX_RESULT_CHARS", "1000")
+    monkeypatch.setenv("TOOL_MAX_TURNS", "2")
+    monkeypatch.setenv("TOOL_MAX_CALLS", "4")
 
     settings = Settings(_env_file=None)
 
@@ -91,6 +106,11 @@ def test_generation_client_settings_load_from_environment(monkeypatch):
     assert settings.generation_budget_safety_margin_tokens == 64
     assert settings.generation_budget_debug is True
     assert settings.generation_instructions == "Be concise."
+    assert settings.tool_search_max_limit == 3
+    assert settings.tool_call_timeout_seconds == 1.5
+    assert settings.tool_max_result_chars == 1000
+    assert settings.tool_max_turns == 2
+    assert settings.tool_max_calls == 4
 
 
 @pytest.mark.parametrize(
@@ -102,6 +122,11 @@ def test_generation_client_settings_load_from_environment(monkeypatch):
         ("GENERATION_CONTEXT_WINDOW_TOKENS", "0", "greater than 0"),
         ("GENERATION_BUDGET_SAFETY_MARGIN_TOKENS", "-1", "greater than or equal to 0"),
         ("GENERATION_INSTRUCTIONS", "   ", "GENERATION_INSTRUCTIONS must not be empty"),
+        ("TOOL_SEARCH_MAX_LIMIT", "0", "greater than or equal to 1"),
+        ("TOOL_CALL_TIMEOUT_SECONDS", "0", "greater than 0"),
+        ("TOOL_MAX_RESULT_CHARS", "0", "greater than or equal to 1"),
+        ("TOOL_MAX_TURNS", "0", "greater than or equal to 1"),
+        ("TOOL_MAX_CALLS", "0", "greater than or equal to 1"),
     ],
 )
 def test_generation_client_settings_reject_invalid_values(

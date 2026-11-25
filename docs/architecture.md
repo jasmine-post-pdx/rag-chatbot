@@ -14,7 +14,12 @@ client
       -> await to_thread(`QuestionJobStore`) for an idempotency lookup, when a key is present
       -> await `QuestionProcessor` (`app/services/question_processor.py`)
         -> `allocate_context_budget` (`app/services/token_budget.py`) before generate
-        -> await `generate_structured(AnswerV1)` (`app/llm/`) for the OpenAI path
+           (tool schemas counted when document tools are enabled)
+        -> OpenAI path without a document store:
+             await `generate_structured(AnswerV1)` (`app/llm/`)
+        -> OpenAI path with a document store:
+             bounded `ToolLoop` (`app/tools/`) via `generate_tool_turn`
+             -> allow-listed `SafeToolExecutor` -> `DocumentStore` (`app/retrieval/`)
       -> await to_thread(`QuestionJobStore`) to persist the terminal job
         -> `SQLiteQuestionJobStore` (`app/stores/sqlite.py`)
     -> readiness -> await to_thread(`QuestionJobStore.is_ready()`)
@@ -32,8 +37,9 @@ client
 | `scripts/question_job_maintenance.py` | SQLite snapshots, tiered backup rotation, and terminal-job archiving. |
 | `app/domain/` | Internal job, answer, context-budget, and typed model-output DTOs, plus domain errors such as idempotency-key reuse, incomplete idempotency records, invalid keys, context-budget overflow, and structured-output failures. |
 | `app/schemas/` | Independent public question, health, and error schemas, including safe processing failure categories. |
-| `app/llm/` | Async free-text and schema-constrained generation interfaces, local fake, and OpenAI Responses adapter. |
-| `app/retrieval/`, `app/tools/` | Package placeholders; no retrieval or tool behavior is implemented yet. |
+| `app/llm/` | Async free-text, schema-constrained, and tool-turn generation interfaces, local fake, and OpenAI Responses adapter. |
+| `app/retrieval/` | `DocumentStore` protocol and `InMemoryDocumentStore` (Step 5 stand-in; vector store in Step 6). |
+| `app/tools/` | Allow-listed read-only document tools, safe executor, and bounded tool loop. |
 
 The FastAPI application lifespan creates, verifies, and owns the SQLite store,
 and when OpenAI generation is configured with an API key it also owns a shared
@@ -57,13 +63,19 @@ estimates. Ranked chunks are selected greedily in order; chunks that do not fit
 are skipped. If fixed input alone exceeds the window, processing fails closed
 without calling the provider. Live requests still supply an empty chunk list
 because retrieval is not wired yet. Budget logs omit prompt and chunk text.
-The OpenAI processor path then requests schema-constrained `AnswerV1` output
-(`generate_structured`), re-validates locally, and maps only the answer text
-onto the public result; citations remain empty until retrieval grounding.
-`ClassificationV1` exists for later filter/tool steps but is not invoked on
-live questions yet. Incomplete structured finishes get one bounded re-request;
-refusals and validation failures become controlled processing failures. See
-`docs/decisions/typed-outputs.md`.
+The OpenAI processor path requests schema-constrained `AnswerV1` output. Without
+a document store it uses a single `generate_structured` call. With a store
+(lifespan seeds `InMemoryDocumentStore` for the OpenAI path) it runs a bounded
+tool loop: the model may call only `search_documents` and `get_document_chunk`,
+each validated, deadline-bounded, and size-capped before observations return.
+Invalid or unknown tools become safe error observations; turn/call bounds fail
+closed. The answer text maps onto the public result; citations remain empty
+until Step 8 grounding, while `RetrievalMetrics` may reflect tool activity.
+`ClassificationV1` exists for later filter/tool routing but is not invoked on
+live questions yet. Incomplete structured finishes get one bounded re-request
+on the non-tool path; refusals and validation failures become controlled
+processing failures. See `docs/decisions/typed-outputs.md` and
+`docs/decisions/tools.md`.
 Processing failures are persisted as failed jobs with a safe error category; the
 submit request still returns a generic server error. API handlers map service
 results and their nested metadata to public schemas. The store serializes jobs as
@@ -85,7 +97,7 @@ or an ingestion pipeline.
 
 | Path | Current contents |
 | --- | --- |
-| `tests/unit/` | Configuration, logging, SQLite job storage, question processors, typed model-output schemas, token/context budgeting, async generation adapters, and event-loop isolation. |
+| `tests/unit/` | Configuration, logging, SQLite job storage, question processors, typed model-output schemas, token/context budgeting, document store, allow-listed tools, tool loop, async generation adapters, and event-loop isolation. |
 | `tests/integration/` | HTTP API behavior, OpenAPI and schema contracts, lifespan, request logging, generation wiring, and an opt-in OpenAI smoke test. |
 | `tests/evals/` | Placeholder package; no retrieval or answer-quality evaluations exist yet. |
 

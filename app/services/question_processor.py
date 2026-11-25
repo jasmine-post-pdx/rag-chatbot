@@ -13,7 +13,11 @@ from app.domain.questions import (
     RetrievalMetrics,
 )
 from app.llm.generation import LLMClient, OpenAIResponsesClient
+from app.retrieval.document_store import DocumentStore
 from app.services.token_budget import ContextBudgetConfig, build_token_counter
+from app.tools.executor import SafeToolExecutor
+from app.tools.loop import ToolLoop
+from app.tools.registry import tool_schema_strings
 
 logger = logging.getLogger(__name__)
 
@@ -88,33 +92,56 @@ class PlaceholderQuestionProcessor:
 
 
 class LLMQuestionProcessor:
-    """Answer questions via schema-constrained generation, without retrieval.
+    """Answer questions via schema-constrained generation, optionally with tools.
 
-    Requests ``AnswerV1`` from the LLM client, validates locally, and maps the
-    structured ``answer`` field onto ``QuestionResult``. Citations stay empty
-    and retrieval counts stay zero until RAG is wired up. Incomplete structured
-    finishes get one bounded re-request; refusals and validation failures fail
-    closed without inventing fields.
+    Without a document store, requests ``AnswerV1`` once via
+    ``generate_structured``. With a store, runs the bounded read-only tool loop
+    and maps tool activity onto ``RetrievalMetrics``. Citations stay empty until
+    Step 8 retrieval grounding. Incomplete structured finishes get one bounded
+    re-request on the non-tool path; refusals and validation failures fail closed.
 
-    When a context budget is configured, fixed input is checked and the
-    assembled prompt (currently the bare question) is sent to the client.
+    When a context budget is configured, fixed input is checked before any
+    provider or tool call. Tool schemas are counted when tools are enabled.
 
     :ivar _client: Language model client used to generate answers.
-    :ivar _budget: Optional context-budget configuration."""
+    :ivar _budget: Optional context-budget configuration.
+    :ivar _document_store: Optional read-only store enabling the tool loop."""
 
     def __init__(
         self,
         client: LLMClient,
         budget: ContextBudgetConfig | None = None,
+        *,
+        document_store: DocumentStore | None = None,
+        tool_max_result_chars: int = 4000,
+        tool_call_timeout_seconds: float = 2.0,
+        tool_search_max_limit: int = 5,
+        tool_max_turns: int = 3,
+        tool_max_calls: int = 6,
+        tool_max_calls_per_turn: int = 3,
     ) -> None:
-        """Initialize the processor with a generation client and optional budget.
+        """Initialize the processor with a generation client and optional tools.
 
         :param client: Language model client used to generate answers.
         :param budget: Optional context-budget configuration. Explicit
             ``is not None`` checks are used so a custom falsy budget object is
-            still honored."""
+            still honored.
+        :param document_store: When not ``None``, enable the read-only tool loop.
+        :param tool_max_result_chars: Observation content character cap.
+        :param tool_call_timeout_seconds: Per-tool-call deadline.
+        :param tool_search_max_limit: Hard max for ``search_documents.limit``.
+        :param tool_max_turns: Maximum model↔tool iterations.
+        :param tool_max_calls: Maximum total tool executions per question.
+        :param tool_max_calls_per_turn: Maximum proposals accepted per model turn."""
         self._client = client
         self._budget = budget
+        self._document_store = document_store
+        self._tool_max_result_chars = tool_max_result_chars
+        self._tool_call_timeout_seconds = tool_call_timeout_seconds
+        self._tool_search_max_limit = tool_search_max_limit
+        self._tool_max_turns = tool_max_turns
+        self._tool_max_calls = tool_max_calls
+        self._tool_max_calls_per_turn = tool_max_calls_per_turn
 
     async def process(
         self,
@@ -128,11 +155,11 @@ class LLMQuestionProcessor:
         :param question_id: Identifier of the question job being processed.
         :param question: User question to answer.
         :param request_id: HTTP request ID used to correlate logs.
-        :returns: The generated answer with model usage and empty retrieval metadata.
+        :returns: The generated answer with model usage and retrieval metadata.
         :raises ContextBudgetExceededError: If configured fixed input exceeds the
             context budget before the provider is called.
         :raises StructuredOutputError: If structured output is refused, remains
-            incomplete after recovery, or fails local validation."""
+            incomplete after recovery, fails local validation, or tool bounds trip."""
         started_at = time.perf_counter()
         provider = getattr(self._client, "provider", type(self._client).__name__)
         model = getattr(self._client, "model", "unknown")
@@ -145,9 +172,16 @@ class LLMQuestionProcessor:
             log_fields["request_id"] = request_id
 
         prompt = question
+        schemas: list[str] = []
+        if self._document_store is not None:
+            schemas = tool_schema_strings(search_max_limit=self._tool_search_max_limit)
         if self._budget is not None:
             try:
-                allocation = self._budget.allocate(question, request_id=request_id)
+                allocation = self._budget.allocate(
+                    question,
+                    request_id=request_id,
+                    tool_schemas=schemas,
+                )
             except ContextBudgetExceededError as exc:
                 elapsed_ms = round((time.perf_counter() - started_at) * 1000, 3)
                 logger.error(
@@ -162,6 +196,16 @@ class LLMQuestionProcessor:
                 )
                 raise
             prompt = allocation.assembled_prompt
+
+        if self._document_store is not None:
+            return await self._process_with_tools(
+                question_id=question_id,
+                question=question,
+                prompt=prompt,
+                request_id=request_id,
+                log_fields=log_fields,
+                started_at=started_at,
+            )
 
         generation = None
         incomplete_retries = 0
@@ -248,6 +292,119 @@ class LLMQuestionProcessor:
             ),
         )
 
+    async def _process_with_tools(
+        self,
+        *,
+        question_id: str,
+        question: str,
+        prompt: str,
+        request_id: str | None,
+        log_fields: dict,
+        started_at: float,
+    ) -> QuestionResult:
+        """Run the bounded tool loop and map the result.
+
+        :param question_id: Question job identifier.
+        :param question: Original user question (for sanitized error logs).
+        :param prompt: Budget-assembled prompt used as the loop user input.
+        :param request_id: Optional HTTP correlation ID.
+        :param log_fields: Shared structured log fields.
+        :param started_at: Monotonic start time for elapsed_ms.
+        :returns: Question result with tool-derived retrieval metrics.
+        :raises StructuredOutputError: On tool-bound or structured failures."""
+        assert self._document_store is not None
+        instructions = None
+        if self._budget is not None:
+            instructions = self._budget.instructions
+        loop = ToolLoop(
+            client=self._client,
+            executor=SafeToolExecutor(
+                self._document_store,
+                max_result_chars=self._tool_max_result_chars,
+                call_timeout_seconds=self._tool_call_timeout_seconds,
+                search_max_limit=self._tool_search_max_limit,
+            ),
+            max_turns=self._tool_max_turns,
+            max_calls=self._tool_max_calls,
+            max_calls_per_turn=self._tool_max_calls_per_turn,
+            search_max_limit=self._tool_search_max_limit,
+        )
+        try:
+            loop_result = await loop.run(
+                prompt,
+                request_id=request_id,
+                instructions=instructions,
+            )
+        except StructuredOutputError as exc:
+            elapsed_ms = round((time.perf_counter() - started_at) * 1000, 3)
+            error_category = _generation_error_category(exc)
+            summary = sanitize_exception_summary(
+                exc, sensitive_values=(question, prompt)
+            )
+            logger.error(
+                "Generation failed: %s",
+                summary,
+                extra={
+                    **log_fields,
+                    "elapsed_ms": elapsed_ms,
+                    "error_category": error_category,
+                    "exception_type": type(exc).__name__,
+                    "structured_output_category": exc.category,
+                },
+            )
+            raise
+        except Exception as exc:
+            elapsed_ms = round((time.perf_counter() - started_at) * 1000, 3)
+            error_category = _generation_error_category(exc)
+            summary = sanitize_exception_summary(
+                exc, sensitive_values=(question, prompt)
+            )
+            logger.error(
+                "Generation failed: %s",
+                summary,
+                extra={
+                    **log_fields,
+                    "elapsed_ms": elapsed_ms,
+                    "error_category": error_category,
+                    "exception_type": type(exc).__name__,
+                },
+            )
+            raise
+
+        generation = loop_result.structured
+        elapsed_ms = round((time.perf_counter() - started_at) * 1000, 3)
+        logger.info(
+            "Generation completed",
+            extra={
+                **log_fields,
+                "provider": generation.provider,
+                "model": generation.model,
+                "elapsed_ms": elapsed_ms,
+                "input_tokens": generation.input_tokens,
+                "output_tokens": generation.output_tokens,
+                "finish_status": generation.finish_status,
+                "provider_request_id": generation.provider_request_id,
+                "insufficient_evidence": generation.parsed.insufficient_evidence,
+                "claim_count": len(generation.parsed.claims),
+                "tool_calls_executed": loop_result.tool_calls_executed,
+            },
+        )
+        return QuestionResult(
+            question_id=question_id,
+            answer=generation.parsed.answer,
+            citations=[],
+            retrieval=RetrievalMetrics(
+                documents_considered=loop_result.documents_considered,
+                chunks_returned=loop_result.chunks_returned,
+            ),
+            model=ModelMetrics(
+                provider=generation.provider,
+                name=generation.model,
+                input_tokens=generation.input_tokens,
+                output_tokens=generation.output_tokens,
+            ),
+        )
+
 
 class UnknownGenerationProviderError(ValueError):
     """The configured generation provider has no matching processor.
@@ -269,6 +426,13 @@ def build_question_processor(
     context_window_tokens: int = 128000,
     safety_margin_tokens: int = 256,
     budget_debug: bool = False,
+    document_store: DocumentStore | None = None,
+    tool_max_result_chars: int = 4000,
+    tool_call_timeout_seconds: float = 2.0,
+    tool_search_max_limit: int = 5,
+    tool_max_turns: int = 3,
+    tool_max_calls: int = 6,
+    tool_max_calls_per_turn: int = 3,
 ) -> QuestionProcessor:
     """Return the question processor for a generation provider.
 
@@ -287,6 +451,14 @@ def build_question_processor(
     :param context_window_tokens: Model context-window size for input budgeting.
     :param safety_margin_tokens: Extra tokens reserved when estimating capacity.
     :param budget_debug: When ``True``, log extra numeric budget fields.
+    :param document_store: Optional read-only store enabling document tools on the
+        OpenAI path.
+    :param tool_max_result_chars: Observation content character cap.
+    :param tool_call_timeout_seconds: Per-tool-call deadline.
+    :param tool_search_max_limit: Hard max for ``search_documents.limit``.
+    :param tool_max_turns: Maximum model↔tool iterations.
+    :param tool_max_calls: Maximum total tool executions per question.
+    :param tool_max_calls_per_turn: Maximum proposals accepted per model turn.
     :returns: The placeholder processor for ``"local"``, or an LLM-backed processor.
     :raises UnknownGenerationProviderError: If the provider is not supported."""
     output_reserve = 1024 if max_output_tokens is None else max_output_tokens
@@ -312,6 +484,13 @@ def build_question_processor(
                 max_retries=max_retries,
             ),
             budget=budget,
+            document_store=document_store,
+            tool_max_result_chars=tool_max_result_chars,
+            tool_call_timeout_seconds=tool_call_timeout_seconds,
+            tool_search_max_limit=tool_search_max_limit,
+            tool_max_turns=tool_max_turns,
+            tool_max_calls=tool_max_calls,
+            tool_max_calls_per_turn=tool_max_calls_per_turn,
         )
     raise UnknownGenerationProviderError(
         f"Unknown GENERATION_PROVIDER {provider!r}; expected 'local' or 'openai'"

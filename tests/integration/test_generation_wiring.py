@@ -88,6 +88,99 @@ def test_fake_llm_processor_returns_and_persists_api_result(
     }
 
 
+def test_fake_llm_processor_with_document_store_keeps_public_shape(
+    configure_generation, monkeypatch
+):
+    """Tool-enabled OpenAI wiring still returns the public question JSON shape.
+
+    :param configure_generation: Fixture that configures generation settings and a
+        temporary SQLite job database.
+    :param monkeypatch: Pytest fixture used to replace the provider factory."""
+    from app.domain.model_outputs import AnswerClaim, AnswerV1
+    from app.domain.tools import ToolCallProposal
+    from app.llm.generation import StructuredGenerationResult, ToolTurnResult
+    from app.retrieval.document_store import DocumentChunk
+    from app.retrieval.memory import InMemoryDocumentStore
+
+    configure_generation("openai", "fake-model")
+    store = InMemoryDocumentStore(
+        [
+            DocumentChunk(
+                source_id="fastapi-guide",
+                chunk_id="c1",
+                text="FastAPI dependency injection uses Depends.",
+                framework="fastapi",
+                language="python",
+            )
+        ]
+    )
+    client = FakeLLMClient(
+        model="fake-model",
+        tool_turns=[
+            ToolTurnResult(
+                kind="tool_calls",
+                tool_calls=[
+                    ToolCallProposal(
+                        call_id="call-1",
+                        name="search_documents",
+                        arguments={"query": "Depends", "limit": 2},
+                    )
+                ],
+            ),
+            ToolTurnResult(
+                kind="structured",
+                structured=StructuredGenerationResult(
+                    parsed=AnswerV1(
+                        answer="FastAPI uses Depends.",
+                        claims=[
+                            AnswerClaim(
+                                claim="Depends wires dependencies",
+                                citation_chunk_ids=["c1"],
+                            )
+                        ],
+                        insufficient_evidence=False,
+                    ),
+                    provider="fake",
+                    model="fake-model",
+                    input_tokens=0,
+                    output_tokens=0,
+                    finish_status="completed",
+                ),
+            ),
+        ],
+    )
+    monkeypatch.setattr(
+        main,
+        "build_question_processor",
+        lambda provider, model, openai_api_key=None, **_kwargs: LLMQuestionProcessor(
+            client,
+            document_store=store,
+        ),
+    )
+
+    with TestClient(main.app) as http:
+        response = http.post(
+            "/v1/questions",
+            json={"question": "How does FastAPI inject dependencies?"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {
+        "question_id",
+        "answer",
+        "citations",
+        "retrieval",
+        "model",
+    }
+    assert body["answer"] == "FastAPI uses Depends."
+    assert body["citations"] == []
+    assert body["retrieval"]["documents_considered"] >= 1
+    assert body["retrieval"]["chunks_returned"] >= 1
+    assert body["model"]["provider"] == "fake"
+    assert body["model"]["name"] == "fake-model"
+
+
 def test_unknown_provider_fails_at_startup(configure_generation):
     """Verify an unsupported provider is rejected when the app starts."""
     configure_generation("not-a-provider")

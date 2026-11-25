@@ -42,7 +42,12 @@ class Settings(BaseSettings):
         fields. Defaults to ``False``.
     :ivar generation_instructions: Optional instructions sent separately from the
         question. Unset means no extra instructions.
-    :ivar openai_api_key: Optional OpenAI API key loaded from the environment."""
+    :ivar openai_api_key: Optional OpenAI API key loaded from the environment.
+    :ivar tool_search_max_limit: Hard maximum for ``search_documents.limit``.
+    :ivar tool_call_timeout_seconds: Per-call deadline for document tools.
+    :ivar tool_max_result_chars: Maximum characters returned in a tool observation.
+    :ivar tool_max_turns: Maximum model↔tool iterations per question.
+    :ivar tool_max_calls: Maximum total tool executions per question."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -80,6 +85,13 @@ class Settings(BaseSettings):
     generation_budget_debug: bool = False
     generation_instructions: str | None = None
     openai_api_key: SecretStr | None = None
+
+    # Read-only document tools (Step 5)
+    tool_search_max_limit: int = Field(default=5, ge=1)
+    tool_call_timeout_seconds: float = Field(default=2.0, gt=0)
+    tool_max_result_chars: int = Field(default=4000, ge=1)
+    tool_max_turns: int = Field(default=3, ge=1)
+    tool_max_calls: int = Field(default=6, ge=1)
 
     @field_validator("generation_instructions", mode="before")
     @classmethod

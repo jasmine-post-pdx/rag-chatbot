@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from app.domain.errors import StructuredOutputError
 from app.domain.model_outputs import AnswerClaim, AnswerV1
+from app.domain.tools import ToolCallProposal
 from app.llm import (
     FakeLLMClient,
     GenerationResult,
@@ -16,7 +17,9 @@ from app.llm import (
     MissingAPIKeyError,
     OpenAIResponsesClient,
     StructuredGenerationResult,
+    ToolTurnResult,
 )
+from app.tools.registry import tool_definitions
 
 
 def test_generation_result_carries_answer_provider_model_and_usage():
@@ -85,6 +88,28 @@ async def test_llm_client_uses_structural_generate_interface():
                 output_tokens=5,
             )
 
+        async def generate_tool_turn(
+            self,
+            input_items,
+            tools,
+            output_model: type,
+        ):
+            """Return a final structured tool turn for protocol satisfaction."""
+            return ToolTurnResult(
+                kind="structured",
+                structured=StructuredGenerationResult(
+                    parsed=output_model(
+                        answer="Final",
+                        claims=[],
+                        insufficient_evidence=True,
+                    ),
+                    provider="test-provider",
+                    model="test-model",
+                    input_tokens=1,
+                    output_tokens=1,
+                ),
+            )
+
     client: LLMClient = FakeClient()
 
     result = await client.generate("What is RAG?")
@@ -106,6 +131,11 @@ async def test_llm_client_uses_structural_generate_interface():
     assert structured.model == "test-model"
     assert structured.input_tokens == 3
     assert structured.output_tokens == 5
+
+    turn = await client.generate_tool_turn("q", tools=[], output_model=AnswerV1)
+    assert turn.kind == "structured"
+    assert turn.structured is not None
+    assert turn.structured.parsed.answer == "Final"
 
 
 def _valid_answer_payload() -> dict:
@@ -775,3 +805,190 @@ def test_retry_delay_uses_equal_jitter(failed_attempt, jitter, expected):
     from app.llm.generation import _retry_delay_seconds
 
     assert _retry_delay_seconds(failed_attempt, jitter) == expected
+
+
+@pytest.mark.asyncio
+async def test_fake_client_scripts_tool_call_then_structured_answer():
+    """Script a tool-call turn followed by a final structured AnswerV1."""
+    tools = tool_definitions(search_max_limit=5)
+    client = FakeLLMClient(
+        tool_turns=[
+            ToolTurnResult(
+                kind="tool_calls",
+                tool_calls=[
+                    ToolCallProposal(
+                        call_id="call-1",
+                        name="search_documents",
+                        arguments={"query": "fastapi", "limit": 2},
+                    )
+                ],
+            ),
+            ToolTurnResult(
+                kind="structured",
+                structured=StructuredGenerationResult(
+                    parsed=AnswerV1(
+                        answer="FastAPI uses Depends.",
+                        claims=[
+                            AnswerClaim(
+                                claim="Depends wires dependencies",
+                                citation_chunk_ids=["c1"],
+                            )
+                        ],
+                        insufficient_evidence=False,
+                    ),
+                    provider="fake",
+                    model="fake",
+                    input_tokens=0,
+                    output_tokens=0,
+                    finish_status="completed",
+                ),
+            ),
+        ]
+    )
+
+    first = await client.generate_tool_turn(
+        "How does FastAPI inject deps?",
+        tools=tools,
+        output_model=AnswerV1,
+    )
+    assert first.kind == "tool_calls"
+    assert first.tool_calls is not None
+    assert first.tool_calls[0].name == "search_documents"
+
+    second = await client.generate_tool_turn(
+        [{"type": "function_call_output", "call_id": "call-1", "output": "[]"}],
+        tools=tools,
+        output_model=AnswerV1,
+    )
+    assert second.kind == "structured"
+    assert second.structured is not None
+    assert second.structured.parsed.answer == "FastAPI uses Depends."
+
+
+@pytest.mark.asyncio
+async def test_fake_client_generate_tool_turn_exhaustion_fails_closed():
+    """Fail closed when no scripted tool turns remain."""
+    client = FakeLLMClient(tool_turns=[])
+
+    with pytest.raises(StructuredOutputError) as exc_info:
+        await client.generate_tool_turn("q", tools=[], output_model=AnswerV1)
+
+    assert exc_info.value.category == "unsupported"
+
+
+@pytest.mark.asyncio
+async def test_openai_client_maps_function_call_output_to_tool_proposals():
+    """Map Responses function_call items into ToolCallProposal values."""
+    tools = tool_definitions(search_max_limit=5)
+    responses = _FakeResponses()
+    responses.response = SimpleNamespace(
+        output_text="",
+        model="gpt-test-2026",
+        usage=SimpleNamespace(input_tokens=5, output_tokens=3),
+        status="completed",
+        id="resp_tools",
+        output=[
+            SimpleNamespace(
+                type="function_call",
+                call_id="call_abc",
+                name="search_documents",
+                arguments='{"query":"budget","limit":3}',
+            )
+        ],
+        output_parsed=None,
+    )
+    client = OpenAIResponsesClient(
+        "gpt-test", client=SimpleNamespace(responses=responses)
+    )
+
+    turn = await client.generate_tool_turn(
+        "What is context budgeting?",
+        tools=tools,
+        output_model=AnswerV1,
+    )
+
+    assert responses.calls[0]["tools"] == tools
+    assert responses.calls[0]["input"] == "What is context budgeting?"
+    assert "text_format" in responses.calls[0]
+    assert turn.kind == "tool_calls"
+    assert turn.tool_calls == [
+        ToolCallProposal(
+            call_id="call_abc",
+            name="search_documents",
+            arguments={"query": "budget", "limit": 3},
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_openai_client_maps_final_structured_tool_turn():
+    """Map a final structured parse during a tool-enabled turn."""
+    tools = tool_definitions(search_max_limit=5)
+    responses = _FakeResponses()
+    responses.response = SimpleNamespace(
+        output_text="",
+        model="gpt-test-2026",
+        usage=SimpleNamespace(input_tokens=8, output_tokens=6),
+        status="completed",
+        id="resp_final",
+        output=[],
+        output_parsed=AnswerV1(
+            answer="Budgeting reserves output tokens.",
+            claims=[
+                AnswerClaim(claim="Output reserve exists", citation_chunk_ids=["c2"])
+            ],
+            insufficient_evidence=False,
+        ),
+    )
+    client = OpenAIResponsesClient(
+        "gpt-test", client=SimpleNamespace(responses=responses)
+    )
+
+    turn = await client.generate_tool_turn(
+        [
+            {"role": "user", "content": "Explain budgeting"},
+            {
+                "type": "function_call_output",
+                "call_id": "call_1",
+                "output": '[{"chunk_id":"c2"}]',
+            },
+        ],
+        tools=tools,
+        output_model=AnswerV1,
+    )
+
+    assert turn.kind == "structured"
+    assert turn.structured is not None
+    assert turn.structured.parsed.answer == "Budgeting reserves output tokens."
+    assert turn.structured.provider_request_id == "resp_final"
+
+
+@pytest.mark.asyncio
+async def test_openai_client_malformed_tool_arguments_fail_closed():
+    """Reject malformed provider tool argument JSON with StructuredOutputError."""
+    tools = tool_definitions(search_max_limit=5)
+    responses = _FakeResponses()
+    responses.response = SimpleNamespace(
+        output_text="",
+        model="gpt-test-2026",
+        usage=None,
+        status="completed",
+        id="resp_bad_args",
+        output=[
+            SimpleNamespace(
+                type="function_call",
+                call_id="call_bad",
+                name="search_documents",
+                arguments="{not-json",
+            )
+        ],
+        output_parsed=None,
+    )
+    client = OpenAIResponsesClient(
+        "gpt-test", client=SimpleNamespace(responses=responses)
+    )
+
+    with pytest.raises(StructuredOutputError) as exc_info:
+        await client.generate_tool_turn("q", tools=tools, output_model=AnswerV1)
+
+    assert exc_info.value.category == "validation"
