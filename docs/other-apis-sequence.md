@@ -65,3 +65,48 @@ sequenceDiagram
         MW-->>Client: 503 + x-request-id
     end
 ```
+
+## POST /v1/search
+
+Retrieval-only search in `app/routers/search.py`. The route obtains
+`SearchService` through `app/dependencies/search.py` and offloads the store
+lookup with `asyncio.to_thread`.
+
+```text
+Client          Middleware       Search route       SearchService       Vector store
+  |                |                 |                 |                |
+  | POST /v1/search|                 |                 |                |
+  |--------------->|                 |                 |                |
+  |                | add request ID |                 |                |
+  |                |---------------->|                 |                |
+  |                |                 | await to_thread(search) |        |
+  |                |                 |---------------->|                |
+  |                |                 |                 | embed query + top-k
+  |                |                 |                 |--------------->|
+  |                |                 |                 |<---------------|
+  |                |                 |<----------------| SearchResponse |
+  |                |<----------------| 200 hits        |                |
+  |<---------------| response + x-request-id           |                |
+```
+
+```mermaid
+sequenceDiagram
+    actor Client
+    participant MW as RequestLogMiddleware
+    participant API as Search router
+    participant Dep as SearchService dependency
+    participant Svc as SearchService
+    participant Store as VectorDocumentStore
+
+    Client->>MW: POST /v1/search
+    MW->>MW: Create/normalize x-request-id
+    MW->>API: Forward request
+    API->>Dep: get_search_service(request)
+    Dep-->>API: Shared service from app state
+    API->>Svc: await to_thread(search)
+    Svc->>Store: search_documents(query, filters, top_k)
+    Store-->>Svc: ranked hits
+    Svc-->>API: SearchResponse
+    API-->>MW: 200 hits + embedding_model + similarity_metric
+    MW-->>Client: 200 + x-request-id
+```

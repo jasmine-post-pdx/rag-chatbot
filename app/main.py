@@ -14,8 +14,12 @@ from app.config.logging import (
 )
 from app.config.settings import settings
 from app.middleware import REQUEST_ID_HEADER, RequestLogMiddleware
-from app.retrieval.memory import InMemoryDocumentStore, sample_corpus
-from app.routers import health, questions
+from app.retrieval.factory import (
+    build_embedding_client,
+    build_vector_store,
+    seed_corpus_if_present,
+)
+from app.routers import health, questions, search
 from app.schemas.errors import ServerErrorResponse, ValidationErrorResponse
 from app.services.question_processor import build_question_processor
 from app.services.question_workflow import (
@@ -23,6 +27,7 @@ from app.services.question_workflow import (
     QuestionStatePersistenceError,
     QuestionWorkflow,
 )
+from app.services.search import SearchService
 from app.stores.sqlite import SQLiteQuestionJobStore
 
 logger = logging.getLogger(__name__)
@@ -32,8 +37,9 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI) -> None:
     """Manage application startup and shutdown state.
 
-    Owns the SQLite job store and, when configured, a shared async OpenAI SDK
-    client. Both are closed on shutdown or failed startup after creation.
+    Owns the SQLite job store, vector search stack, and when configured a shared
+    async OpenAI SDK client. Resources are closed on shutdown or failed startup
+    after creation.
 
     :param app: The FastAPI application instance.
     :yields: Control is returned to the application while it runs."""
@@ -52,14 +58,24 @@ async def lifespan(app: FastAPI) -> None:
             timeout=settings.generation_timeout_seconds,
             max_retries=0,
         )
-    store = None
+
+    embedding_client = build_embedding_client(settings)
+    vector_store = build_vector_store(settings, embedding_client)
+    seed_corpus_if_present(settings, vector_store, embedding_client)
+    search_service = SearchService(
+        vector_store,
+        embedding_model=embedding_client.model,
+        similarity_metric=settings.similarity_metric,
+        default_top_k=settings.search_default_top_k,
+        max_top_k=settings.search_max_top_k,
+    )
+
+    # Step 6: tools use the same vector-backed store as HTTP search.
     document_store = None
     if settings.generation_provider == "openai":
-        # Step 5: deterministic in-memory corpus; Step 6 replaces this adapter.
-        document_store = InMemoryDocumentStore(
-            sample_corpus(),
-            max_limit=settings.tool_search_max_limit,
-        )
+        document_store = vector_store
+
+    store = None
     try:
         processor = build_question_processor(
             settings.generation_provider,
@@ -84,6 +100,9 @@ async def lifespan(app: FastAPI) -> None:
         store.verify_integrity()
         app.state.question_job_store = store
         app.state.generation_client = generation_client
+        app.state.embedding_client = embedding_client
+        app.state.vector_store = vector_store
+        app.state.search_service = search_service
         app.state.question_workflow = QuestionWorkflow(
             store=store,
             processor=processor,
@@ -96,6 +115,9 @@ async def lifespan(app: FastAPI) -> None:
             await generation_client.close()
         app.state.question_job_store = None
         app.state.generation_client = None
+        app.state.embedding_client = None
+        app.state.vector_store = None
+        app.state.search_service = None
         app.state.question_workflow = None
 
 
@@ -118,6 +140,7 @@ app = FastAPI(
 app.add_middleware(RequestLogMiddleware)
 app.include_router(health.router)
 app.include_router(questions.router)
+app.include_router(search.router)
 
 
 @app.exception_handler(RequestValidationError)

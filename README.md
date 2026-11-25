@@ -1,11 +1,10 @@
 # rag-chatbot — RAG Engineering Lab
 
 > Status: This is an active learning project. The HTTP API, request/response
-> schemas, SQLite-backed question-job storage, optional OpenAI generation, and
-> deterministic token/context budgeting are implemented, but retrieval is still
-> a placeholder. I consider the current milestone complete enough to build on:
-> the structure is testable, documented, and ready for real RAG adapters to be
-> dropped in.
+> schemas, SQLite-backed question-job storage, optional OpenAI generation,
+> deterministic token/context budgeting, document tools, and Step 6 embeddings
+> retrieval (`POST /v1/search`, ingestion, in-memory or pgvector stores) are
+> implemented. Retrieval-grounded answers are still ahead.
 
 ## Why this exists
 
@@ -39,29 +38,30 @@ client
 | --- | --- |
 | `app/main.py` | Application entry point: lifespan, middleware, and error handlers. |
 | `app/middleware.py` | Request correlation IDs and one-line request logging. |
-| `app/routers/` | HTTP endpoints for health, readiness, and questions. |
-| `app/dependencies/` | Injects the shared workflow into question routes and the job store into readiness. |
+| `app/routers/` | HTTP endpoints for health, readiness, questions, and search. |
+| `app/dependencies/` | Injects the shared workflow, search service, and job store. |
 | `app/schemas/` | Public request/response models for the HTTP contract. |
 | `app/domain/` | Internal question/job DTOs, context-budget models, and domain errors. |
 | `app/config/` | Environment-based settings and logging configuration. |
-| `app/services/` | Question workflow, answer processors, and token/context budgeting. |
+| `app/services/` | Question workflow, answer processors, search, and token/context budgeting. |
 | `app/stores/` | `QuestionJobStore` protocol and SQLite implementation. |
-| `app/llm/` | Provider-neutral async generation and tool-turn interfaces, OpenAI Responses adapter, and a fake client. |
-| `app/retrieval/` | `DocumentStore` protocol and in-memory adapter; chunking/embeddings/vector search still ahead. |
+| `app/llm/` | Generation adapters plus `EmbeddingClient` (fake default, optional local). |
+| `app/retrieval/` | Chunking, ingestion, vector `DocumentStore` (memory/pgvector), Step 5 substring stand-in. |
 | `app/tools/` | Allow-listed read-only document tools, safe executor, and bounded tool loop. |
-| `scripts/` | Maintenance commands for SQLite backups, archives, and restore checks. |
-| `tests/unit/`, `tests/integration/` | Automated coverage for config, storage, processing, generation, and the HTTP API. |
-| `tests/evals/` | Placeholder for retrieval and answer-quality evaluations. |
-| `docs/` | Architecture notes and API sequence diagrams. |
+| `scripts/` | Ingestion CLI plus SQLite backup/archive maintenance. |
+| `tests/unit/`, `tests/integration/` | Automated coverage for config, storage, processing, generation, retrieval, and the HTTP API. |
+| `tests/evals/` | Representative retrieval queries and automated source-id checks. |
+| `docs/` | Architecture notes, decisions, and API sequence diagrams. |
 
-API handlers stay thin: they validate input, call the workflow, and map results
-to public schemas. Generation supports `local` (placeholder) and `openai`
+API handlers stay thin: they validate input, call services, and map results to
+public schemas. Generation supports `local` (placeholder) and `openai`
 adapters. The OpenAI path can call allow-listed read-only document tools against
-an in-memory store; vector retrieval is still ahead. Processing failures are
+the same vector store that backs `POST /v1/search`. Processing failures are
 stored as failed jobs with `error_category: "processing_error"`; submission
 still returns a generic HTTP 500. More detail lives in
-[`docs/architecture.md`](docs/architecture.md) and
-[`docs/decisions/tools.md`](docs/decisions/tools.md).
+[`docs/architecture.md`](docs/architecture.md),
+[`docs/decisions/embeddings-retrieval.md`](docs/decisions/embeddings-retrieval.md),
+and [`docs/decisions/tools.md`](docs/decisions/tools.md).
 
 ## Stack
 
@@ -74,7 +74,7 @@ still returns a generic HTTP 500. More detail lives in
 - **pytest** — test runner for unit, integration, and evaluation tests.
 - **Ruff** — linter and formatter.
 - **Docker + Docker Compose** — can run the API with persistent SQLite storage;
-  Postgres/pgvector remains optional future vector-store work.
+  optional Postgres/pgvector via the `vector-db` profile.
 
 ## Running it
 
@@ -428,7 +428,7 @@ replaced with a generated ID before they are logged or returned.
 
 ### Local Postgres with pgvector
 
-A Postgres container with pgvector is provided for future vector-store work:
+A Postgres container with pgvector is available when `VECTOR_STORE=pgvector`:
 
 ```bash
 docker compose --profile vector-db up -d postgres
@@ -449,11 +449,11 @@ the SQLite store until the retrieval layer is wired up.
 ## Limitations And Troubleshooting
 
 - Answers are placeholders by default. With `GENERATION_PROVIDER=openai`, answers
-  come from the model directly; retrieval is not implemented yet, so there are
-  no citations. Context budgeting still runs with an empty chunk list so oversized
-  fixed input fails before a provider call.
-- Only the question-job endpoints are functional; there is no document ingestion
-  or search endpoint.
+  come from the model (optionally after document tools); citations stay empty
+  until Step 8 grounding. Context budgeting still selects an empty ranked-chunk
+  list on the non-tool path so oversized fixed input fails before a provider call.
+- `POST /v1/search` is retrieval-only. Ingest sample markdown with
+  `python -m scripts.ingest` (or rely on lifespan seeding of `data/raw`).
 - `POST /v1/questions` still finishes in one request: it awaits generation,
   persists the completed or failed job, and returns. SQLite work is offloaded
   off the event loop. In-flight work is not persisted; the status endpoint
@@ -479,17 +479,16 @@ Run the automated tests from the project root:
 pytest
 ```
 
-The default `pytest` command excludes the `openai_smoke` marker, so it does
-not call the real provider even when `RUN_OPENAI_SMOKE=1` is set. The smoke
-test also skips unless that variable is set. To opt in, configure
-`OPENAI_API_KEY` and `OPENAI_SMOKE_MODEL` in the environment or `.env`, then
-run:
+The default `pytest` command excludes the `openai_smoke`, `embeddings_smoke`,
+and `vector_db` markers. Opt-in examples:
 
 ```bash
 RUN_OPENAI_SMOKE=1 pytest -m openai_smoke
+RUN_VECTOR_DB=1 pytest -m vector_db
 ```
 
-The smoke test makes a real provider request and may incur API usage charges.
+The OpenAI smoke test makes a real provider request and may incur API usage
+charges. The vector_db tests need a reachable Postgres/pgvector instance.
 
 Run the tests inside the Docker `dev` target:
 
@@ -509,7 +508,8 @@ backed by an in-memory SQLite store. Unit tests cover configuration, logging,
 job storage, the placeholder and LLM processors, token/context budgeting,
 document tools and the bounded tool loop, the async generation adapters, and
 event-loop isolation when SQLite or generation is blocked or cancelled.
-`tests/evals/` is still a placeholder for retrieval and answer-quality tests.
+`tests/evals/` holds representative retrieval queries; answer-quality evals are
+still ahead.
 
 ## What's next
 
@@ -517,12 +517,18 @@ The following are proposed next steps. They will be implemented to the extent
 that they support this project's learning goals. Some may be deferred to future
 projects.
 
-- [ ] Add real document ingestion (load, chunk, embed) under `app/retrieval/`.
-- [ ] Add a local or API-based embedding model adapter under `app/llm/`.
+- [x] Add real document ingestion (load, chunk, embed) under `app/retrieval/`
+      (Step 6).
+- [x] Add an embedding model adapter under `app/llm/` (fake default; optional
+      local sentence-transformers) (Step 6).
+- [x] Store chunks and embeddings in memory by default, with optional
+      Postgres/pgvector (Step 6).
+- [x] Add retrieval-only `POST /v1/search` and representative retrieval queries
+      under `tests/evals/` (Step 6).
+- [ ] Compare chunking strategies and record the decision (Step 7).
 - [ ] Add a generation adapter that builds prompts from retrieved context.
-- [ ] Replace the placeholder processor with retrieval-grounded generation.
-- [ ] Store chunks and embeddings in the Postgres/pgvector container.
-- [ ] Add retrieval-quality evaluations under `tests/evals/`.
+- [ ] Replace the placeholder processor with retrieval-grounded generation
+      (Step 8).
 - [x] Move database path and model settings into configuration or environment
       variables.
 - [x] Await generation asynchronously and offload blocking SQLite work from the

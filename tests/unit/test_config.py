@@ -61,6 +61,15 @@ def test_generation_client_settings_use_current_client_defaults(monkeypatch):
         "TOOL_MAX_RESULT_CHARS",
         "TOOL_MAX_TURNS",
         "TOOL_MAX_CALLS",
+        "VECTOR_STORE",
+        "VECTOR_COLLECTION",
+        "SIMILARITY_METRIC",
+        "CHUNK_SIZE",
+        "CHUNK_OVERLAP",
+        "SEARCH_DEFAULT_TOP_K",
+        "SEARCH_MAX_TOP_K",
+        "EMBEDDING_DIMENSIONS",
+        "CORPUS_RAW_DIR",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -78,6 +87,17 @@ def test_generation_client_settings_use_current_client_defaults(monkeypatch):
     assert settings.tool_max_result_chars == 4000
     assert settings.tool_max_turns == 3
     assert settings.tool_max_calls == 6
+    assert settings.vector_store == "memory"
+    assert settings.vector_collection == "documents"
+    assert settings.similarity_metric == "cosine"
+    assert settings.chunk_size == 500
+    assert settings.chunk_overlap == 50
+    assert settings.search_default_top_k == 5
+    assert settings.search_max_top_k == 20
+    assert settings.embedding_dimensions == 32
+    assert settings.corpus_raw_dir == "data/raw"
+    assert settings.embedding_provider == "fake"
+    assert settings.embedding_model == "fake-embed"
 
 
 def test_generation_client_settings_load_from_environment(monkeypatch):
@@ -127,6 +147,12 @@ def test_generation_client_settings_load_from_environment(monkeypatch):
         ("TOOL_MAX_RESULT_CHARS", "0", "greater than or equal to 1"),
         ("TOOL_MAX_TURNS", "0", "greater than or equal to 1"),
         ("TOOL_MAX_CALLS", "0", "greater than or equal to 1"),
+        ("VECTOR_STORE", "qdrant", "memory' or 'pgvector"),
+        ("SIMILARITY_METRIC", "dot", "cosine"),
+        ("CHUNK_SIZE", "0", "greater than 0"),
+        ("SEARCH_DEFAULT_TOP_K", "0", "greater than or equal to 1"),
+        ("SEARCH_MAX_TOP_K", "0", "greater than or equal to 1"),
+        ("EMBEDDING_DIMENSIONS", "0", "greater than 0"),
     ],
 )
 def test_generation_client_settings_reject_invalid_values(

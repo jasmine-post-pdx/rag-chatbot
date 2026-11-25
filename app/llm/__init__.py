@@ -4,6 +4,7 @@ Generation clients expose async ``generate``, ``generate_structured``, and
 ``generate_tool_turn`` methods that callers must await.
 """
 
+from app.llm.embeddings import EmbeddingClient, FakeEmbeddingClient
 from app.llm.generation import (
     FakeLLMClient,
     GenerationResult,
@@ -15,6 +16,8 @@ from app.llm.generation import (
 )
 
 __all__ = [
+    "EmbeddingClient",
+    "FakeEmbeddingClient",
     "FakeLLMClient",
     "GenerationResult",
     "LLMClient",
