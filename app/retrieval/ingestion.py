@@ -8,7 +8,12 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from app.llm.embeddings import EmbeddingClient
-from app.retrieval.chunking import SourceDocument, chunk_document
+from app.retrieval.chunking import (
+    ChunkingConfig,
+    ChunkingStrategy,
+    SourceDocument,
+    chunk_document,
+)
 from app.retrieval.vector_store import EmbeddedChunk, VectorDocumentStore
 
 _FRONT_MATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n(.*)$", re.DOTALL)
@@ -71,6 +76,39 @@ def load_markdown_source(path: Path) -> SourceDocument:
     )
 
 
+def build_chunking_config(
+    *,
+    strategy: str,
+    chunk_size: int,
+    chunk_overlap: int,
+) -> ChunkingConfig:
+    """Build a ``ChunkingConfig`` from settings-style fields.
+
+    :param strategy: Strategy name (case-insensitive).
+    :param chunk_size: Max size in strategy units.
+    :param chunk_overlap: Overlap in strategy units.
+    :returns: A configured ``ChunkingConfig``.
+    :raises ValueError: If the strategy name is unsupported."""
+    normalized = strategy.strip().casefold()
+    try:
+        selected = ChunkingStrategy(normalized)
+    except ValueError as exc:
+        raise ValueError(f"Unsupported chunking strategy: {strategy}") from exc
+
+    token_counter = None
+    if selected == ChunkingStrategy.TOKEN_AWARE:
+        from app.services.token_budget import ApproximateTokenCounter
+
+        token_counter = ApproximateTokenCounter()
+
+    return ChunkingConfig(
+        strategy=selected,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        token_counter=token_counter,
+    )
+
+
 class IngestionPipeline:
     """Chunk, embed, and upsert sources with delete-before-write re-index.
 
@@ -79,8 +117,9 @@ class IngestionPipeline:
 
     :ivar _store: Vector-backed document store.
     :ivar _embedder: Embedding client for document vectors.
-    :ivar _chunk_size: Character window size.
-    :ivar _chunk_overlap: Character overlap between windows."""
+    :ivar _chunk_size: Character window size used when ``chunking_config`` is unset.
+    :ivar _chunk_overlap: Character overlap used when ``chunking_config`` is unset.
+    :ivar _chunking_config: Optional strategy config that overrides legacy size kwargs."""
 
     def __init__(
         self,
@@ -89,17 +128,20 @@ class IngestionPipeline:
         *,
         chunk_size: int = 500,
         chunk_overlap: int = 50,
+        chunking_config: ChunkingConfig | None = None,
     ) -> None:
         """Configure the pipeline.
 
         :param store: Destination vector store.
         :param embedder: Embedding client.
-        :param chunk_size: Character window size.
-        :param chunk_overlap: Character overlap between windows."""
+        :param chunk_size: Character window size when ``chunking_config`` is unset.
+        :param chunk_overlap: Character overlap when ``chunking_config`` is unset.
+        :param chunking_config: Optional strategy-aware chunking configuration."""
         self._store = store
         self._embedder = embedder
         self._chunk_size = chunk_size
         self._chunk_overlap = chunk_overlap
+        self._chunking_config = chunking_config
 
     def ingest_documents(self, sources: list[SourceDocument]) -> IngestResult:
         """Ingest an in-memory list of sources.
@@ -115,11 +157,14 @@ class IngestionPipeline:
             removed = self._store.delete_source(source.source_id)
             if removed:
                 deleted_sources += 1
-            chunks = chunk_document(
-                source,
-                chunk_size=self._chunk_size,
-                chunk_overlap=self._chunk_overlap,
-            )
+            if self._chunking_config is not None:
+                chunks = chunk_document(source, config=self._chunking_config)
+            else:
+                chunks = chunk_document(
+                    source,
+                    chunk_size=self._chunk_size,
+                    chunk_overlap=self._chunk_overlap,
+                )
             all_chunks.extend(chunks)
 
         if not all_chunks:
