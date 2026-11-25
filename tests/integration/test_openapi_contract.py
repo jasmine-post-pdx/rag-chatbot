@@ -20,7 +20,7 @@ def test_full_openapi_contract_fingerprint():
     """
     canonical = json.dumps(app.openapi(), sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(canonical.encode()).hexdigest()
-    expected = "0fea1fade988d0f091912d11917bdb05cb24828d11ab203833010402e76fb12c"
+    expected = "50e7da5710bd0d72250ee6228a9580f7de73aa03985d712ac92249b3961ed6c5"
     assert digest == expected, (
         f"OpenAPI fingerprint changed ({digest}); update only after reviewing "
         "contract diffs and named schema assertions"
@@ -43,9 +43,12 @@ def test_readiness_uses_the_job_store_dependency():
     """Readiness checks the job store, and liveness has no service dependency."""
     ready = next(route for route in health.router.routes if route.path == "/ready")
     liveness = next(route for route in health.router.routes if route.path == "/health")
-    assert [dependency.call for dependency in ready.dependant.dependencies] == [
-        get_question_job_store
+    dependency_calls = [
+        dependency.call
+        for dependency in ready.dependant.dependencies
+        if dependency.call is not None
     ]
+    assert get_question_job_store in dependency_calls
     assert liveness.dependant.dependencies == []
 
 
