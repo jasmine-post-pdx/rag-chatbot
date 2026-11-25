@@ -9,6 +9,35 @@ next steps as they stood at the time, not necessarily the current state.
 
 ---
 
+## 2026-11-24 — Embeddings and retrieval
+
+**What I figured out**
+Step 6 added an `EmbeddingClient` (deterministic fake by default, optional
+local sentence-transformers), recursive character chunking with stable
+`{source_id}:{ordinal}` IDs, an ingestion pipeline that delete-by-source then
+upserts, an in-memory cosine vector `DocumentStore`, optional pgvector, and
+retrieval-only `POST /v1/search`. Lifespan seeds `data/raw` and wires the same
+vector store into OpenAI document tools. Thirty representative queries live
+under `tests/evals/` with an automated source-id check.
+
+**Why it matters**
+Tools and HTTP search share real embedding retrieval behind the Step 5
+protocol without adding generation to search. Re-index rules avoid silently
+serving stale chunks when a source changes.
+
+**Still fuzzy**
+- Whether fake-embedder eval hits will transfer to MiniLM without retuning
+  queries or chunk sizes
+- When memory vs pgvector should become the Compose default for demos
+
+**Next**
+Step 7 chunking experiment; then Step 8 retrieval-grounded answers.
+
+See also `docs/decisions/embeddings-retrieval.md` and
+`docs/evals/retrieval-inspection.md`.
+
+---
+
 ## 2026-11-22 — Safe read-only tool calls before vector retrieval
 
 **What I figured out**
@@ -31,6 +60,7 @@ the in-memory store behind the same interface.
 
 **Next**
 Step 6 embeddings and retrieval; connect tools to a real vector-backed store.
+(Completed later; see the 2026-11-24 entry.)
 
 See also `docs/decisions/tools.md`.
 
