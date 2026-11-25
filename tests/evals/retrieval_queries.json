@@ -1,0 +1,158 @@
+{
+  "corpus": "data/raw",
+  "embedding_model": "fake-embed",
+  "similarity_metric": "cosine",
+  "top_k": 5,
+  "queries": [
+    {
+      "id": "q01",
+      "query": "How does FastAPI dependency injection work?",
+      "expect_any_source_ids": ["fastapi-guide"]
+    },
+    {
+      "id": "q02",
+      "query": "What is Depends used for in FastAPI?",
+      "expect_any_source_ids": ["fastapi-guide"]
+    },
+    {
+      "id": "q03",
+      "query": "FastAPI shared resources in path operations",
+      "expect_any_source_ids": ["fastapi-guide"]
+    },
+    {
+      "id": "q04",
+      "query": "How do FastAPI lifespan handlers work?",
+      "expect_any_source_ids": ["fastapi-lifespan"]
+    },
+    {
+      "id": "q05",
+      "query": "Create shared clients on startup and close on shutdown",
+      "expect_any_source_ids": ["fastapi-lifespan"]
+    },
+    {
+      "id": "q06",
+      "query": "FastAPI application lifespan cleanup",
+      "expect_any_source_ids": ["fastapi-lifespan"]
+    },
+    {
+      "id": "q07",
+      "query": "What is context budgeting in RAG?",
+      "expect_any_source_ids": ["rag-budget"]
+    },
+    {
+      "id": "q08",
+      "query": "Reserve tokens for instructions question and output",
+      "expect_any_source_ids": ["rag-budget"]
+    },
+    {
+      "id": "q09",
+      "query": "How are ranked chunks selected into the context window?",
+      "expect_any_source_ids": ["rag-budget"]
+    },
+    {
+      "id": "q10",
+      "query": "Safety margin before selecting retrieval chunks",
+      "expect_any_source_ids": ["rag-budget"]
+    },
+    {
+      "id": "q11",
+      "query": "Express middleware request ordering",
+      "expect_any_source_ids": ["express-guide"]
+    },
+    {
+      "id": "q12",
+      "query": "Attach request IDs in Express",
+      "expect_any_source_ids": ["express-guide"]
+    },
+    {
+      "id": "q13",
+      "query": "Reject invalid input with Express middleware",
+      "expect_any_source_ids": ["express-guide"]
+    },
+    {
+      "id": "q14",
+      "query": "Python FastAPI routers and services",
+      "expect_any_source_ids": ["fastapi-guide", "fastapi-lifespan"]
+    },
+    {
+      "id": "q15",
+      "query": "TypeScript Express middleware pipeline",
+      "expect_any_source_ids": ["express-guide"]
+    },
+    {
+      "id": "q16",
+      "query": "Do not silently send oversized prompts",
+      "expect_any_source_ids": ["rag-budget"]
+    },
+    {
+      "id": "q17",
+      "query": "Tool schemas counted in the token budget",
+      "expect_any_source_ids": ["rag-budget"]
+    },
+    {
+      "id": "q18",
+      "query": "Close OpenAI clients during FastAPI shutdown",
+      "expect_any_source_ids": ["fastapi-lifespan"]
+    },
+    {
+      "id": "q19",
+      "query": "Inject dependencies with Depends",
+      "expect_any_source_ids": ["fastapi-guide"]
+    },
+    {
+      "id": "q20",
+      "query": "Middleware runs in order for each request",
+      "expect_any_source_ids": ["express-guide"]
+    },
+    {
+      "id": "q21",
+      "query": "Output reserve and safety margin tokens",
+      "expect_any_source_ids": ["rag-budget"]
+    },
+    {
+      "id": "q22",
+      "query": "Shared FastAPI resources for routers",
+      "expect_any_source_ids": ["fastapi-guide"]
+    },
+    {
+      "id": "q23",
+      "query": "Startup and shutdown hooks for clients",
+      "expect_any_source_ids": ["fastapi-lifespan"]
+    },
+    {
+      "id": "q24",
+      "query": "Select ranked chunks without exceeding budget",
+      "expect_any_source_ids": ["rag-budget"]
+    },
+    {
+      "id": "q25",
+      "query": "Express reject malformed requests",
+      "expect_any_source_ids": ["express-guide"]
+    },
+    {
+      "id": "q26",
+      "query": "Wire FastAPI routers to services",
+      "expect_any_source_ids": ["fastapi-guide"]
+    },
+    {
+      "id": "q27",
+      "query": "Context window allocation for retrieval",
+      "expect_any_source_ids": ["rag-budget"]
+    },
+    {
+      "id": "q28",
+      "query": "Lifespan creates clients used by path operations",
+      "expect_any_source_ids": ["fastapi-lifespan", "fastapi-guide"]
+    },
+    {
+      "id": "q29",
+      "query": "Request ID middleware in Express",
+      "expect_any_source_ids": ["express-guide"]
+    },
+    {
+      "id": "q30",
+      "query": "Budgeting before generation in a RAG service",
+      "expect_any_source_ids": ["rag-budget"]
+    }
+  ]
+}
