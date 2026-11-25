@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     :ivar similarity_metric: Documented similarity metric label (``cosine``).
     :ivar chunk_size: Character window size for recursive splitting.
     :ivar chunk_overlap: Character overlap between adjacent chunks.
+    :ivar chunking_strategy: Default chunking strategy name
+        (``recursive_character``, ``token_aware``, or ``structure_aware``).
     :ivar search_default_top_k: Default ``top_k`` for ``POST /v1/search``.
     :ivar search_max_top_k: Hard maximum ``top_k`` accepted by search.
     :ivar corpus_raw_dir: Directory of raw markdown sources for ingestion.
@@ -91,6 +93,7 @@ class Settings(BaseSettings):
     similarity_metric: str = "cosine"
     chunk_size: int = Field(default=500, gt=0)
     chunk_overlap: int = Field(default=50, ge=0)
+    chunking_strategy: str = "recursive_character"
     search_default_top_k: int = Field(default=5, ge=1)
     search_max_top_k: int = Field(default=20, ge=1)
     corpus_raw_dir: str = "data/raw"
@@ -136,6 +139,25 @@ class Settings(BaseSettings):
         normalized = value.strip().casefold()
         if normalized != "cosine":
             raise ValueError("SIMILARITY_METRIC must be 'cosine'")
+        return normalized
+
+    @field_validator("chunking_strategy")
+    @classmethod
+    def validate_chunking_strategy(cls, value: str) -> str:
+        """Allow only supported chunking strategy names.
+
+        :param value: Configured strategy name.
+        :returns: The normalized strategy name.
+        :raises ValueError: If the strategy is blank or unsupported."""
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("CHUNKING_STRATEGY must not be empty")
+        normalized = value.strip().casefold()
+        allowed = {"recursive_character", "token_aware", "structure_aware"}
+        if normalized not in allowed:
+            raise ValueError(
+                "CHUNKING_STRATEGY must be one of: "
+                "recursive_character, token_aware, structure_aware"
+            )
         return normalized
 
     @field_validator("generation_instructions", mode="before")
