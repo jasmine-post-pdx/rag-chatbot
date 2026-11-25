@@ -6,7 +6,7 @@ adapter with a vector-backed implementation without changing tool code.
 
 from typing import Protocol
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class DocumentChunk(BaseModel):
@@ -15,14 +15,18 @@ class DocumentChunk(BaseModel):
     :ivar source_id: Identifier of the source document.
     :ivar chunk_id: Stable identifier of the chunk within that source.
     :ivar text: Chunk body text returned to tools as untrusted reference.
+    :ivar title: Optional human-readable source title.
     :ivar framework: Optional framework metadata used for filtered search.
-    :ivar language: Optional language metadata used for filtered search."""
+    :ivar language: Optional language metadata used for filtered search.
+    :ivar metadata: Additional non-secret provenance fields (e.g. path)."""
 
     source_id: str
     chunk_id: str
     text: str
+    title: str | None = None
     framework: str | None = None
     language: str | None = None
+    metadata: dict[str, str] = Field(default_factory=dict)
 
 
 class SearchHit(BaseModel):
@@ -31,12 +35,17 @@ class SearchHit(BaseModel):
     :ivar source_id: Identifier of the source document.
     :ivar chunk_id: Identifier of the matched chunk.
     :ivar text: Matched chunk text.
+    :ivar title: Optional human-readable source title.
+    :ivar metadata: Additional non-secret provenance fields.
     :ivar rank: One-based rank among returned hits; lower is better.
-    :ivar score: Optional relevance score; unused by greedy budgeting."""
+    :ivar score: Optional relevance score (cosine similarity for vector search);
+        not a calibrated confidence. Unused by greedy budgeting."""
 
     source_id: str
     chunk_id: str
     text: str
+    title: str | None = None
+    metadata: dict[str, str] = Field(default_factory=dict)
     rank: int | None = None
     score: float | None = None
 

@@ -8,6 +8,7 @@ license = { text = "MIT" }
 dependencies = [
     "fastapi>=0.115",
     "openai>=1.0",
+    "psycopg[binary]>=3.2",
     "pydantic-settings>=2.0",
     "tiktoken>=0.7",
     "uvicorn>=0.30",
@@ -20,6 +21,9 @@ dev = [
     "ruff>=0.6",
     "httpx2>=0.1",
 ]
+embeddings = [
+    "sentence-transformers>=3.0",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -31,11 +35,13 @@ packages = ["app"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-addopts = "-m 'not openai_smoke'"
+addopts = "-m 'not openai_smoke and not embeddings_smoke and not vector_db'"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 markers = [
     "openai_smoke: opt-in test that calls the real OpenAI Responses API",
+    "embeddings_smoke: opt-in test that loads a local sentence-transformers model",
+    "vector_db: opt-in test that requires Postgres/pgvector",
 ]
 
 [tool.ruff]

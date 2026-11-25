@@ -25,8 +25,18 @@ class Settings(BaseSettings):
     :ivar postgres_user: Postgres username.
     :ivar postgres_password: Postgres password.
     :ivar postgres_db: Postgres database name.
-    :ivar embedding_provider: Adapter name for embeddings (e.g., "local", "openai").
+    :ivar embedding_provider: Adapter name for embeddings (e.g., "local", "fake").
     :ivar embedding_model: Name or identifier of the embedding model.
+    :ivar embedding_dimensions: Vector width for the fake embedder (ignored by
+        local sentence-transformers when that adapter reports its own size).
+    :ivar vector_store: Vector backend name (``memory`` or ``pgvector``).
+    :ivar vector_collection: Logical collection/index name for stored chunks.
+    :ivar similarity_metric: Documented similarity metric label (``cosine``).
+    :ivar chunk_size: Character window size for recursive splitting.
+    :ivar chunk_overlap: Character overlap between adjacent chunks.
+    :ivar search_default_top_k: Default ``top_k`` for ``POST /v1/search``.
+    :ivar search_max_top_k: Hard maximum ``top_k`` accepted by search.
+    :ivar corpus_raw_dir: Directory of raw markdown sources for ingestion.
     :ivar generation_provider: Adapter name for answer generation.
     :ivar generation_model: Name or identifier of the generation model.
     :ivar generation_timeout_seconds: Per-request generation client timeout.
@@ -72,9 +82,18 @@ class Settings(BaseSettings):
     postgres_password: str = "raglab"
     postgres_db: str = "raglab"
 
-    # Model adapters
-    embedding_provider: str = "local"
-    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    # Model adapters and retrieval
+    embedding_provider: str = "fake"
+    embedding_model: str = "fake-embed"
+    embedding_dimensions: int = Field(default=32, gt=0)
+    vector_store: str = "memory"
+    vector_collection: str = "documents"
+    similarity_metric: str = "cosine"
+    chunk_size: int = Field(default=500, gt=0)
+    chunk_overlap: int = Field(default=50, ge=0)
+    search_default_top_k: int = Field(default=5, ge=1)
+    search_max_top_k: int = Field(default=20, ge=1)
+    corpus_raw_dir: str = "data/raw"
     generation_provider: str = "local"
     generation_model: str = "stub"
     generation_timeout_seconds: float = Field(default=30.0, gt=0)
@@ -92,6 +111,32 @@ class Settings(BaseSettings):
     tool_max_result_chars: int = Field(default=4000, ge=1)
     tool_max_turns: int = Field(default=3, ge=1)
     tool_max_calls: int = Field(default=6, ge=1)
+
+    @field_validator("vector_store")
+    @classmethod
+    def validate_vector_store(cls, value: str) -> str:
+        """Allow only supported vector store backends.
+
+        :param value: Configured backend name.
+        :returns: The normalized backend name.
+        :raises ValueError: If the backend is unsupported."""
+        normalized = value.strip().casefold()
+        if normalized not in {"memory", "pgvector"}:
+            raise ValueError("VECTOR_STORE must be 'memory' or 'pgvector'")
+        return normalized
+
+    @field_validator("similarity_metric")
+    @classmethod
+    def validate_similarity_metric(cls, value: str) -> str:
+        """Allow only documented similarity metrics.
+
+        :param value: Configured metric name.
+        :returns: The normalized metric name.
+        :raises ValueError: If the metric is unsupported."""
+        normalized = value.strip().casefold()
+        if normalized != "cosine":
+            raise ValueError("SIMILARITY_METRIC must be 'cosine'")
+        return normalized
 
     @field_validator("generation_instructions", mode="before")
     @classmethod
