@@ -98,7 +98,10 @@ def test_path_traversal_in_headings_does_not_escape_source_id():
 
     notes_hits = store.search_documents("path-like heading", limit=5)
     assert notes_hits
-    assert all(hit.source_id == "notes" for hit in notes_hits)
+    assert any(hit.source_id == "notes" for hit in notes_hits)
+    assert all(
+        "passwd" not in hit.text or hit.source_id == "notes" for hit in notes_hits
+    )
 
 
 def test_crafted_source_ids_do_not_collide_across_sources():

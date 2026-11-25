@@ -7,6 +7,10 @@ from app.retrieval.chunking import (
     chunk_document,
     normalize_text,
 )
+from app.retrieval.chunking_experiment import (
+    ChunkingExperimentReport,
+    run_chunking_experiment,
+)
 from app.retrieval.document_store import DocumentChunk, DocumentStore, SearchHit
 from app.retrieval.ingestion import IngestionPipeline, IngestResult
 from app.retrieval.memory import InMemoryDocumentStore, sample_corpus
@@ -15,6 +19,7 @@ from app.retrieval.vector_store import EmbeddedChunk
 
 __all__ = [
     "ChunkingConfig",
+    "ChunkingExperimentReport",
     "ChunkingStrategy",
     "DocumentChunk",
     "DocumentStore",
@@ -27,5 +32,6 @@ __all__ = [
     "SourceDocument",
     "chunk_document",
     "normalize_text",
+    "run_chunking_experiment",
     "sample_corpus",
 ]
