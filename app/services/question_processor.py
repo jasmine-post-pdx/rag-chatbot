@@ -656,15 +656,19 @@ def build_question_processor(
     :param context_window_tokens: Model context-window size for input budgeting.
     :param safety_margin_tokens: Extra tokens reserved when estimating capacity.
     :param budget_debug: When ``True``, log extra numeric budget fields.
-    :param document_store: Optional read-only store enabling document tools on the
-        OpenAI path.
-    :param tool_max_result_chars: Observation content character cap.
-    :param tool_call_timeout_seconds: Per-tool-call deadline.
-    :param tool_search_max_limit: Hard max for ``search_documents.limit``.
-    :param tool_max_turns: Maximum model↔tool iterations.
+    :param document_store: Optional read-only store. When provided for OpenAI,
+        the factory returns ``GroundedQuestionProcessor`` (retrieve → budget →
+        citation-validated answer). Tool-loop ``LLMQuestionProcessor`` remains
+        available via direct construction.
+    :param tool_max_result_chars: Observation content character cap for tool loop.
+    :param tool_call_timeout_seconds: Per-tool-call deadline for tool loop.
+    :param tool_search_max_limit: Hard max for ``search_documents.limit``; also
+        used as ``retrieval_top_k`` for the grounded path.
+    :param tool_max_turns: Maximum model↔tool iterations for tool loop.
     :param tool_max_calls: Maximum total tool executions per question.
     :param tool_max_calls_per_turn: Maximum proposals accepted per model turn.
-    :returns: The placeholder processor for ``"local"``, or an LLM-backed processor.
+    :returns: The placeholder processor for ``"local"``, a grounded processor when
+        OpenAI is paired with a document store, or an LLM processor otherwise.
     :raises UnknownGenerationProviderError: If the provider is not supported."""
     output_reserve = 1024 if max_output_tokens is None else max_output_tokens
     budget = ContextBudgetConfig(
@@ -678,25 +682,23 @@ def build_question_processor(
     if provider == "local":
         return PlaceholderQuestionProcessor(budget=budget)
     if provider == "openai":
-        return LLMQuestionProcessor(
-            OpenAIResponsesClient(
-                model,
-                api_key=openai_api_key,
-                client=openai_client,
-                timeout_seconds=timeout_seconds,
-                max_output_tokens=max_output_tokens,
-                instructions=instructions,
-                max_retries=max_retries,
-            ),
-            budget=budget,
-            document_store=document_store,
-            tool_max_result_chars=tool_max_result_chars,
-            tool_call_timeout_seconds=tool_call_timeout_seconds,
-            tool_search_max_limit=tool_search_max_limit,
-            tool_max_turns=tool_max_turns,
-            tool_max_calls=tool_max_calls,
-            tool_max_calls_per_turn=tool_max_calls_per_turn,
+        client = OpenAIResponsesClient(
+            model,
+            api_key=openai_api_key,
+            client=openai_client,
+            timeout_seconds=timeout_seconds,
+            max_output_tokens=max_output_tokens,
+            instructions=instructions,
+            max_retries=max_retries,
         )
+        if document_store is not None:
+            return GroundedQuestionProcessor(
+                client,
+                document_store,
+                budget=budget,
+                retrieval_top_k=tool_search_max_limit,
+            )
+        return LLMQuestionProcessor(client, budget=budget)
     raise UnknownGenerationProviderError(
         f"Unknown GENERATION_PROVIDER {provider!r}; expected 'local' or 'openai'"
     )

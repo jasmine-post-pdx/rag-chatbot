@@ -70,7 +70,7 @@ async def lifespan(app: FastAPI) -> None:
         max_top_k=settings.search_max_top_k,
     )
 
-    # Step 6: tools use the same vector-backed store as HTTP search.
+    # OpenAI + store → GroundedQuestionProcessor (Step 8). Same vector store as search.
     document_store = None
     if settings.generation_provider == "openai":
         document_store = vector_store
