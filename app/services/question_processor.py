@@ -2,11 +2,12 @@
 
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from typing import Protocol
 
 from app.config.logging import sanitize_exception_summary
 from app.domain.errors import ContextBudgetExceededError, StructuredOutputError
-from app.domain.model_outputs import AnswerV1
+from app.domain.model_outputs import AnswerV1, ClassificationV1
 from app.domain.questions import (
     ModelMetrics,
     QuestionResult,
@@ -404,6 +405,58 @@ class LLMQuestionProcessor:
                 output_tokens=generation.output_tokens,
             ),
         )
+
+
+class GroundedQuestionProcessor:
+    """Retrieve, budget, and generate a citation-validated answer (Step 8).
+
+    Stub only: constructor accepts the planned dependencies so TDD tests can
+    collect and fail red before the retrieve → budget → generate → validate
+    pipeline is implemented.
+
+    :ivar _client: Language model client used for structured generation.
+    :ivar _document_store: Read-only store used for top-k retrieval.
+    :ivar _budget: Optional context-budget configuration.
+    :ivar _retrieval_top_k: Maximum chunks requested from the store.
+    :ivar _classifier: Optional async classifier returning ``ClassificationV1``."""
+
+    def __init__(
+        self,
+        client: LLMClient,
+        document_store: DocumentStore,
+        budget: ContextBudgetConfig | None = None,
+        *,
+        retrieval_top_k: int = 5,
+        classifier: Callable[[str], Awaitable[ClassificationV1]] | None = None,
+    ) -> None:
+        """Store dependencies for the grounded answering path.
+
+        :param client: Language model client used to generate structured answers.
+        :param document_store: Read-only store searched for evidence chunks.
+        :param budget: Optional context-budget configuration for ranked selection.
+        :param retrieval_top_k: Maximum hits requested from the document store.
+        :param classifier: Optional async callable that returns retrieval filters."""
+        self._client = client
+        self._document_store = document_store
+        self._budget = budget
+        self._retrieval_top_k = retrieval_top_k
+        self._classifier = classifier
+
+    async def process(
+        self,
+        question_id: str,
+        question: str,
+        *,
+        request_id: str | None = None,
+    ) -> QuestionResult:
+        """Produce a retrieval-grounded answer with validated citations.
+
+        :param question_id: Identifier of the question job being processed.
+        :param question: User question to answer.
+        :param request_id: Optional HTTP request ID used to correlate logs.
+        :returns: The generated answer with citations and retrieval metadata.
+        :raises NotImplementedError: Until Step 8 grounded answering is implemented."""
+        raise NotImplementedError("Step 8 grounded answering is not implemented yet")
 
 
 class UnknownGenerationProviderError(ValueError):
