@@ -1,12 +1,15 @@
 """Question processor port, implementations, and provider selection."""
 
+import asyncio
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from typing import Protocol
 
 from app.config.logging import sanitize_exception_summary
+from app.domain.context import RankedChunk
 from app.domain.errors import ContextBudgetExceededError, StructuredOutputError
-from app.domain.model_outputs import AnswerV1
+from app.domain.model_outputs import AnswerV1, ClassificationV1
 from app.domain.questions import (
     ModelMetrics,
     QuestionResult,
@@ -14,7 +17,12 @@ from app.domain.questions import (
 )
 from app.llm.generation import LLMClient, OpenAIResponsesClient
 from app.retrieval.document_store import DocumentStore
-from app.services.token_budget import ContextBudgetConfig, build_token_counter
+from app.services.citations import validate_and_map_citations
+from app.services.token_budget import (
+    ApproximateTokenCounter,
+    ContextBudgetConfig,
+    build_token_counter,
+)
 from app.tools.executor import SafeToolExecutor
 from app.tools.loop import ToolLoop
 from app.tools.registry import tool_schema_strings
@@ -406,6 +414,203 @@ class LLMQuestionProcessor:
         )
 
 
+class GroundedQuestionProcessor:
+    """Retrieve, budget, and generate a citation-validated answer (Step 8).
+
+    Flow: optional classification filters → top-k store search → token-budget
+    selection → evidence-bound structured generation → citation ID validation
+    against selected chunks only. Corpus text is untrusted reference evidence.
+
+    :ivar _client: Language model client used for structured generation.
+    :ivar _document_store: Read-only store used for top-k retrieval.
+    :ivar _budget: Optional context-budget configuration.
+    :ivar _retrieval_top_k: Maximum chunks requested from the store.
+    :ivar _classifier: Optional async classifier returning ``ClassificationV1``."""
+
+    def __init__(
+        self,
+        client: LLMClient,
+        document_store: DocumentStore,
+        budget: ContextBudgetConfig | None = None,
+        *,
+        retrieval_top_k: int = 5,
+        classifier: Callable[[str], Awaitable[ClassificationV1]] | None = None,
+    ) -> None:
+        """Store dependencies for the grounded answering path.
+
+        :param client: Language model client used to generate structured answers.
+        :param document_store: Read-only store searched for evidence chunks.
+        :param budget: Optional context-budget configuration for ranked selection.
+        :param retrieval_top_k: Maximum hits requested from the document store.
+        :param classifier: Optional async callable that returns retrieval filters."""
+        self._client = client
+        self._document_store = document_store
+        self._budget = budget
+        self._retrieval_top_k = retrieval_top_k
+        self._classifier = classifier
+
+    async def process(
+        self,
+        question_id: str,
+        question: str,
+        *,
+        request_id: str | None = None,
+    ) -> QuestionResult:
+        """Produce a retrieval-grounded answer with validated citations.
+
+        :param question_id: Identifier of the question job being processed.
+        :param question: User question to answer.
+        :param request_id: Optional HTTP request ID used to correlate logs.
+        :returns: The generated answer with citations and retrieval metadata.
+        :raises ContextBudgetExceededError: If fixed input alone exceeds the budget.
+        :raises StructuredOutputError: On structured or citation validation failures.
+        :raises Exception: Provider failures propagate without fabricating answers."""
+        started_at = time.perf_counter()
+        provider = getattr(self._client, "provider", type(self._client).__name__)
+        model = getattr(self._client, "model", "unknown")
+        log_fields: dict = {
+            "question_id": question_id,
+            "provider": provider,
+            "model": model,
+        }
+        if request_id is not None:
+            log_fields["request_id"] = request_id
+
+        framework: str | None = None
+        language: str | None = None
+        if self._classifier is not None:
+            classification = await self._classifier(question)
+            framework = classification.framework
+            language = classification.language
+
+        hits = await asyncio.to_thread(
+            lambda: self._document_store.search_documents(
+                question,
+                framework=framework,
+                language=language,
+                limit=self._retrieval_top_k,
+            )
+        )
+
+        ranked = [
+            RankedChunk(
+                source_id=hit.source_id,
+                chunk_id=hit.chunk_id,
+                text=hit.text,
+                rank=hit.rank,
+                score=hit.score,
+            )
+            for hit in hits
+        ]
+
+        budget = self._budget
+        if budget is None:
+            budget = ContextBudgetConfig(
+                counter=ApproximateTokenCounter(),
+                context_window_tokens=128000,
+                output_reserve_tokens=1024,
+                safety_margin_tokens=0,
+            )
+
+        try:
+            allocation = budget.allocate(
+                question,
+                request_id=request_id,
+                ranked_chunks=ranked,
+            )
+        except ContextBudgetExceededError as exc:
+            elapsed_ms = round((time.perf_counter() - started_at) * 1000, 3)
+            logger.error(
+                "Generation failed: %s",
+                sanitize_exception_summary(exc, sensitive_values=(question,)),
+                extra={
+                    **log_fields,
+                    "elapsed_ms": elapsed_ms,
+                    "error_category": "context_budget_exceeded",
+                    "exception_type": type(exc).__name__,
+                },
+            )
+            raise
+
+        prompt = allocation.assembled_prompt
+        try:
+            generation = await self._client.generate_structured(prompt, AnswerV1)
+            citations = validate_and_map_citations(
+                generation.parsed,
+                allocation.selected_chunks,
+            )
+        except StructuredOutputError as exc:
+            elapsed_ms = round((time.perf_counter() - started_at) * 1000, 3)
+            error_category = _generation_error_category(exc)
+            summary = sanitize_exception_summary(
+                exc, sensitive_values=(question, prompt, *(chunk.text for chunk in ranked))
+            )
+            logger.error(
+                "Generation failed: %s",
+                summary,
+                extra={
+                    **log_fields,
+                    "elapsed_ms": elapsed_ms,
+                    "error_category": error_category,
+                    "exception_type": type(exc).__name__,
+                    "structured_output_category": exc.category,
+                },
+            )
+            raise
+        except Exception as exc:
+            elapsed_ms = round((time.perf_counter() - started_at) * 1000, 3)
+            error_category = _generation_error_category(exc)
+            summary = sanitize_exception_summary(
+                exc, sensitive_values=(question, prompt, *(chunk.text for chunk in ranked))
+            )
+            logger.error(
+                "Generation failed: %s",
+                summary,
+                extra={
+                    **log_fields,
+                    "elapsed_ms": elapsed_ms,
+                    "error_category": error_category,
+                    "exception_type": type(exc).__name__,
+                },
+            )
+            raise
+
+        elapsed_ms = round((time.perf_counter() - started_at) * 1000, 3)
+        logger.info(
+            "Generation completed",
+            extra={
+                **log_fields,
+                "provider": generation.provider,
+                "model": generation.model,
+                "elapsed_ms": elapsed_ms,
+                "input_tokens": generation.input_tokens,
+                "output_tokens": generation.output_tokens,
+                "finish_status": generation.finish_status,
+                "provider_request_id": generation.provider_request_id,
+                "insufficient_evidence": generation.parsed.insufficient_evidence,
+                "claim_count": len(generation.parsed.claims),
+                "citation_count": len(citations),
+                "documents_considered": len(hits),
+                "chunks_returned": allocation.selected_count,
+            },
+        )
+        return QuestionResult(
+            question_id=question_id,
+            answer=generation.parsed.answer,
+            citations=citations,
+            retrieval=RetrievalMetrics(
+                documents_considered=len(hits),
+                chunks_returned=allocation.selected_count,
+            ),
+            model=ModelMetrics(
+                provider=generation.provider,
+                name=generation.model,
+                input_tokens=generation.input_tokens,
+                output_tokens=generation.output_tokens,
+            ),
+        )
+
+
 class UnknownGenerationProviderError(ValueError):
     """The configured generation provider has no matching processor.
 
@@ -451,15 +656,19 @@ def build_question_processor(
     :param context_window_tokens: Model context-window size for input budgeting.
     :param safety_margin_tokens: Extra tokens reserved when estimating capacity.
     :param budget_debug: When ``True``, log extra numeric budget fields.
-    :param document_store: Optional read-only store enabling document tools on the
-        OpenAI path.
-    :param tool_max_result_chars: Observation content character cap.
-    :param tool_call_timeout_seconds: Per-tool-call deadline.
-    :param tool_search_max_limit: Hard max for ``search_documents.limit``.
-    :param tool_max_turns: Maximum model↔tool iterations.
+    :param document_store: Optional read-only store. When provided for OpenAI,
+        the factory returns ``GroundedQuestionProcessor`` (retrieve → budget →
+        citation-validated answer). Tool-loop ``LLMQuestionProcessor`` remains
+        available via direct construction.
+    :param tool_max_result_chars: Observation content character cap for tool loop.
+    :param tool_call_timeout_seconds: Per-tool-call deadline for tool loop.
+    :param tool_search_max_limit: Hard max for ``search_documents.limit``; also
+        used as ``retrieval_top_k`` for the grounded path.
+    :param tool_max_turns: Maximum model↔tool iterations for tool loop.
     :param tool_max_calls: Maximum total tool executions per question.
     :param tool_max_calls_per_turn: Maximum proposals accepted per model turn.
-    :returns: The placeholder processor for ``"local"``, or an LLM-backed processor.
+    :returns: The placeholder processor for ``"local"``, a grounded processor when
+        OpenAI is paired with a document store, or an LLM processor otherwise.
     :raises UnknownGenerationProviderError: If the provider is not supported."""
     output_reserve = 1024 if max_output_tokens is None else max_output_tokens
     budget = ContextBudgetConfig(
@@ -473,25 +682,23 @@ def build_question_processor(
     if provider == "local":
         return PlaceholderQuestionProcessor(budget=budget)
     if provider == "openai":
-        return LLMQuestionProcessor(
-            OpenAIResponsesClient(
-                model,
-                api_key=openai_api_key,
-                client=openai_client,
-                timeout_seconds=timeout_seconds,
-                max_output_tokens=max_output_tokens,
-                instructions=instructions,
-                max_retries=max_retries,
-            ),
-            budget=budget,
-            document_store=document_store,
-            tool_max_result_chars=tool_max_result_chars,
-            tool_call_timeout_seconds=tool_call_timeout_seconds,
-            tool_search_max_limit=tool_search_max_limit,
-            tool_max_turns=tool_max_turns,
-            tool_max_calls=tool_max_calls,
-            tool_max_calls_per_turn=tool_max_calls_per_turn,
+        client = OpenAIResponsesClient(
+            model,
+            api_key=openai_api_key,
+            client=openai_client,
+            timeout_seconds=timeout_seconds,
+            max_output_tokens=max_output_tokens,
+            instructions=instructions,
+            max_retries=max_retries,
         )
+        if document_store is not None:
+            return GroundedQuestionProcessor(
+                client,
+                document_store,
+                budget=budget,
+                retrieval_top_k=tool_search_max_limit,
+            )
+        return LLMQuestionProcessor(client, budget=budget)
     raise UnknownGenerationProviderError(
         f"Unknown GENERATION_PROVIDER {provider!r}; expected 'local' or 'openai'"
     )

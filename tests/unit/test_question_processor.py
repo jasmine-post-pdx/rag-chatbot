@@ -4,6 +4,7 @@ import pytest
 
 from app.domain.questions import ModelMetrics, RetrievalMetrics
 from app.services.question_processor import (
+    GroundedQuestionProcessor,
     LLMQuestionProcessor,
     PlaceholderQuestionProcessor,
     UnknownGenerationProviderError,
@@ -54,8 +55,8 @@ def test_openai_provider_uses_llm_processor_without_requiring_api_key(monkeypatc
     assert processor._document_store is None
 
 
-def test_openai_provider_accepts_document_store_for_tools(monkeypatch):
-    """Pass an in-memory document store through to the OpenAI processor."""
+def test_openai_provider_with_document_store_builds_grounded_processor(monkeypatch):
+    """OpenAI plus a document store selects the retrieval-grounded processor."""
     from app.retrieval.memory import InMemoryDocumentStore
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -65,14 +66,14 @@ def test_openai_provider_accepts_document_store_for_tools(monkeypatch):
         "openai",
         "gpt-test",
         document_store=store,
-        tool_max_turns=2,
-        tool_max_calls=4,
+        tool_search_max_limit=7,
     )
 
-    assert isinstance(processor, LLMQuestionProcessor)
+    assert isinstance(processor, GroundedQuestionProcessor)
     assert processor._document_store is store
-    assert processor._tool_max_turns == 2
-    assert processor._tool_max_calls == 4
+    assert processor._retrieval_top_k == 7
+    assert processor._budget is not None
+
 
 
 def test_openai_provider_receives_generation_request_settings(monkeypatch):

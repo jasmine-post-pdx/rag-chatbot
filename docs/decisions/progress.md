@@ -9,6 +9,33 @@ next steps as they stood at the time, not necessarily the current state.
 
 ---
 
+## 2026-11-26 — Retrieval-grounded answers
+
+**What I figured out**
+Step 8 adds `validate_and_map_citations` (selected-chunk ID membership only)
+and `GroundedQuestionProcessor`: optional classify/filter → top-k store search
+→ token-budget selection → evidence-bound `AnswerV1` → citation mapping onto
+public `Citation` rows. OpenAI + a document store now builds the grounded
+processor by default; the Step 5 tool loop stays available via direct
+`LLMQuestionProcessor` construction. Corpus text is framed as untrusted
+evidence; invented or budget-discarded citation IDs fail closed.
+
+**Why it matters**
+`POST /v1/questions` can return real citations tied to chunks actually
+supplied to the model, and ID validation is explicitly not semantic
+groundedness proof.
+
+**Still fuzzy**
+- Whether optional live classification should run on every question by default
+- How much citation text to truncate for access-controlled deployments
+
+**Next**
+Step 9 bounded async I/O and concurrent ingestion.
+
+See also `docs/decisions/grounded-answers.md`.
+
+---
+
 ## 2026-11-25 — Chunking experiment
 
 **What I figured out**
@@ -31,6 +58,7 @@ and the decision is tied to actual metrics instead of intuition.
 
 **Next**
 Step 8 retrieval-grounded answers.
+(Completed later; see the 2026-11-26 entry.)
 
 See also `docs/decisions/chunking.md`.
 
