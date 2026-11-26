@@ -1,11 +1,13 @@
 """Question processor port, implementations, and provider selection."""
 
+import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
 from typing import Protocol
 
 from app.config.logging import sanitize_exception_summary
+from app.domain.context import RankedChunk
 from app.domain.errors import ContextBudgetExceededError, StructuredOutputError
 from app.domain.model_outputs import AnswerV1, ClassificationV1
 from app.domain.questions import (
@@ -15,7 +17,12 @@ from app.domain.questions import (
 )
 from app.llm.generation import LLMClient, OpenAIResponsesClient
 from app.retrieval.document_store import DocumentStore
-from app.services.token_budget import ContextBudgetConfig, build_token_counter
+from app.services.citations import validate_and_map_citations
+from app.services.token_budget import (
+    ApproximateTokenCounter,
+    ContextBudgetConfig,
+    build_token_counter,
+)
 from app.tools.executor import SafeToolExecutor
 from app.tools.loop import ToolLoop
 from app.tools.registry import tool_schema_strings
@@ -410,9 +417,9 @@ class LLMQuestionProcessor:
 class GroundedQuestionProcessor:
     """Retrieve, budget, and generate a citation-validated answer (Step 8).
 
-    Stub only: constructor accepts the planned dependencies so TDD tests can
-    collect and fail red before the retrieve → budget → generate → validate
-    pipeline is implemented.
+    Flow: optional classification filters → top-k store search → token-budget
+    selection → evidence-bound structured generation → citation ID validation
+    against selected chunks only. Corpus text is untrusted reference evidence.
 
     :ivar _client: Language model client used for structured generation.
     :ivar _document_store: Read-only store used for top-k retrieval.
@@ -455,8 +462,153 @@ class GroundedQuestionProcessor:
         :param question: User question to answer.
         :param request_id: Optional HTTP request ID used to correlate logs.
         :returns: The generated answer with citations and retrieval metadata.
-        :raises NotImplementedError: Until Step 8 grounded answering is implemented."""
-        raise NotImplementedError("Step 8 grounded answering is not implemented yet")
+        :raises ContextBudgetExceededError: If fixed input alone exceeds the budget.
+        :raises StructuredOutputError: On structured or citation validation failures.
+        :raises Exception: Provider failures propagate without fabricating answers."""
+        started_at = time.perf_counter()
+        provider = getattr(self._client, "provider", type(self._client).__name__)
+        model = getattr(self._client, "model", "unknown")
+        log_fields: dict = {
+            "question_id": question_id,
+            "provider": provider,
+            "model": model,
+        }
+        if request_id is not None:
+            log_fields["request_id"] = request_id
+
+        framework: str | None = None
+        language: str | None = None
+        if self._classifier is not None:
+            classification = await self._classifier(question)
+            framework = classification.framework
+            language = classification.language
+
+        hits = await asyncio.to_thread(
+            lambda: self._document_store.search_documents(
+                question,
+                framework=framework,
+                language=language,
+                limit=self._retrieval_top_k,
+            )
+        )
+
+        ranked = [
+            RankedChunk(
+                source_id=hit.source_id,
+                chunk_id=hit.chunk_id,
+                text=hit.text,
+                rank=hit.rank,
+                score=hit.score,
+            )
+            for hit in hits
+        ]
+
+        budget = self._budget
+        if budget is None:
+            budget = ContextBudgetConfig(
+                counter=ApproximateTokenCounter(),
+                context_window_tokens=128000,
+                output_reserve_tokens=1024,
+                safety_margin_tokens=0,
+            )
+
+        try:
+            allocation = budget.allocate(
+                question,
+                request_id=request_id,
+                ranked_chunks=ranked,
+            )
+        except ContextBudgetExceededError as exc:
+            elapsed_ms = round((time.perf_counter() - started_at) * 1000, 3)
+            logger.error(
+                "Generation failed: %s",
+                sanitize_exception_summary(exc, sensitive_values=(question,)),
+                extra={
+                    **log_fields,
+                    "elapsed_ms": elapsed_ms,
+                    "error_category": "context_budget_exceeded",
+                    "exception_type": type(exc).__name__,
+                },
+            )
+            raise
+
+        prompt = allocation.assembled_prompt
+        try:
+            generation = await self._client.generate_structured(prompt, AnswerV1)
+            citations = validate_and_map_citations(
+                generation.parsed,
+                allocation.selected_chunks,
+            )
+        except StructuredOutputError as exc:
+            elapsed_ms = round((time.perf_counter() - started_at) * 1000, 3)
+            error_category = _generation_error_category(exc)
+            summary = sanitize_exception_summary(
+                exc, sensitive_values=(question, prompt, *(chunk.text for chunk in ranked))
+            )
+            logger.error(
+                "Generation failed: %s",
+                summary,
+                extra={
+                    **log_fields,
+                    "elapsed_ms": elapsed_ms,
+                    "error_category": error_category,
+                    "exception_type": type(exc).__name__,
+                    "structured_output_category": exc.category,
+                },
+            )
+            raise
+        except Exception as exc:
+            elapsed_ms = round((time.perf_counter() - started_at) * 1000, 3)
+            error_category = _generation_error_category(exc)
+            summary = sanitize_exception_summary(
+                exc, sensitive_values=(question, prompt, *(chunk.text for chunk in ranked))
+            )
+            logger.error(
+                "Generation failed: %s",
+                summary,
+                extra={
+                    **log_fields,
+                    "elapsed_ms": elapsed_ms,
+                    "error_category": error_category,
+                    "exception_type": type(exc).__name__,
+                },
+            )
+            raise
+
+        elapsed_ms = round((time.perf_counter() - started_at) * 1000, 3)
+        logger.info(
+            "Generation completed",
+            extra={
+                **log_fields,
+                "provider": generation.provider,
+                "model": generation.model,
+                "elapsed_ms": elapsed_ms,
+                "input_tokens": generation.input_tokens,
+                "output_tokens": generation.output_tokens,
+                "finish_status": generation.finish_status,
+                "provider_request_id": generation.provider_request_id,
+                "insufficient_evidence": generation.parsed.insufficient_evidence,
+                "claim_count": len(generation.parsed.claims),
+                "citation_count": len(citations),
+                "documents_considered": len(hits),
+                "chunks_returned": allocation.selected_count,
+            },
+        )
+        return QuestionResult(
+            question_id=question_id,
+            answer=generation.parsed.answer,
+            citations=citations,
+            retrieval=RetrievalMetrics(
+                documents_considered=len(hits),
+                chunks_returned=allocation.selected_count,
+            ),
+            model=ModelMetrics(
+                provider=generation.provider,
+                name=generation.model,
+                input_tokens=generation.input_tokens,
+                output_tokens=generation.output_tokens,
+            ),
+        )
 
 
 class UnknownGenerationProviderError(ValueError):
