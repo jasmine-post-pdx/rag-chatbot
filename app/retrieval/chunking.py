@@ -23,6 +23,19 @@ def normalize_text(text: str) -> str:
     return _WHITESPACE_RE.sub(" ", text).strip()
 
 
+def normalize_structure_text(text: str) -> str:
+    """Normalize markdown lightly while preserving structural newlines.
+
+    Full ``normalize_text`` would collapse headings and fences onto one line and
+    break structure-aware splitting. This helper only unifies newlines and trims
+    document edges.
+
+    :param text: Raw markdown body.
+    :returns: Edge-trimmed text with ``\\n`` newlines, possibly empty."""
+    unified = text.replace("\r\n", "\n").replace("\r", "\n")
+    return unified.strip()
+
+
 class ChunkingStrategy(str, Enum):
     """Supported Step 7 chunking variants."""
 
@@ -181,18 +194,18 @@ def _split_token_aware(
         if end >= len(words):
             break
 
-        # Advance with token overlap measured on the emitted piece.
+        # Advance by word index so overlap maps back into ``words`` directly.
         if chunk_overlap <= 0:
             start = end
             continue
 
-        overlap_words: list[str] = []
-        for word in reversed(piece.split(" ")):
-            candidate = " ".join([word, *overlap_words]) if overlap_words else word
+        overlap_start = end
+        for index in range(end - 1, start - 1, -1):
+            candidate = " ".join(words[index:end])
             if token_counter.count(candidate) > chunk_overlap:
                 break
-            overlap_words.insert(0, word)
-        start = max(end - len(overlap_words), start + 1)
+            overlap_start = index
+        start = max(overlap_start, start + 1)
 
     return chunks
 
@@ -349,9 +362,11 @@ def chunk_document(
         )
 
     if config.strategy == ChunkingStrategy.STRUCTURE_AWARE:
+        # Preserve newlines for heading/fence detection; only trim edges and
+        # unify line endings so empty/whitespace-only sources still yield [].
         return _split_structure_aware(
             source,
-            source.text,
+            normalize_structure_text(source.text),
             chunk_size=config.chunk_size,
             chunk_overlap=config.chunk_overlap,
         )

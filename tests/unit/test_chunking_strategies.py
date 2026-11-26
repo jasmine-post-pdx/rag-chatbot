@@ -144,6 +144,68 @@ def test_token_aware_never_exceeds_token_limit():
         assert counter.count(chunk.text) <= 10
 
 
+def test_token_aware_overlap_uses_word_indices_with_variable_length_words():
+    """Overlap advances by word index so shared prefixes stay within the token budget."""
+    counter = ApproximateTokenCounter()
+    # Unique words with mixed lengths so shared prefix/suffix implies real overlap.
+    words = [
+        (f"longword{index:03d}" if index % 5 == 0 else f"w{index:03d}")
+        for index in range(60)
+    ]
+    source = _source(text=" ".join(words))
+    config = ChunkingConfig(
+        strategy=ChunkingStrategy.TOKEN_AWARE,
+        chunk_size=8,
+        chunk_overlap=3,
+        token_counter=counter,
+    )
+
+    chunks = chunk_document(source, config=config)
+
+    assert len(chunks) >= 2
+    for chunk in chunks:
+        assert counter.count(chunk.text) <= 8
+
+    covered = " ".join(chunk.text for chunk in chunks).split(" ")
+    assert set(words).issubset(set(covered))
+
+    for left, right in zip(chunks, chunks[1:], strict=False):
+        left_words = left.text.split(" ")
+        right_words = right.text.split(" ")
+        shared = 0
+        for size in range(1, min(len(left_words), len(right_words)) + 1):
+            if left_words[-size:] == right_words[:size]:
+                shared = size
+        assert shared >= 1
+        assert counter.count(" ".join(left_words[-shared:])) <= 3
+
+
+def test_structure_aware_preserves_newlines_after_edge_normalization():
+    """Structure-aware trims edges but does not collapse markdown to one line."""
+    source = _source(
+        text=(
+            "\r\n"
+            "# Injection\r\n"
+            "FastAPI dependency injection wires routers to services.\r\n\r\n"
+            "# Lifespan\r\n"
+            "Lifespan handlers create shared clients on startup.\r\n"
+        )
+    )
+    config = ChunkingConfig(
+        strategy=ChunkingStrategy.STRUCTURE_AWARE,
+        chunk_size=200,
+        chunk_overlap=20,
+    )
+
+    chunks = chunk_document(source, config=config)
+
+    assert len(chunks) >= 2
+    assert any("\n" in chunk.text or chunk.text.startswith("# Injection") for chunk in chunks)
+    assert not any(
+        "Injection" in chunk.text and "Lifespan" in chunk.text for chunk in chunks
+    )
+
+
 def test_structure_aware_keeps_heading_sections_separated():
     """Structure-aware splitting does not glue distinct Markdown sections together."""
     source = _source(
