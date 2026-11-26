@@ -9,7 +9,7 @@ from pathlib import Path
 
 from app.config.settings import settings
 from app.llm.embeddings import FakeEmbeddingClient
-from app.retrieval.ingestion import IngestionPipeline
+from app.retrieval.ingestion import IngestionPipeline, build_chunking_config
 from app.retrieval.memory_vector import InMemoryVectorDocumentStore
 
 logger = logging.getLogger(__name__)
@@ -80,6 +80,11 @@ def main(argv: list[str] | None = None) -> int:
         embedder,
         chunk_size=settings.chunk_size,
         chunk_overlap=settings.chunk_overlap,
+        chunking_config=build_chunking_config(
+            strategy=settings.chunking_strategy,
+            chunk_size=settings.chunk_size,
+            chunk_overlap=settings.chunk_overlap,
+        ),
     )
     result = pipeline.ingest_directory(args.path)
     logger.info(

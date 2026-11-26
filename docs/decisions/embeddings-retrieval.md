@@ -64,8 +64,13 @@ docker compose --profile vector-db up -d postgres
 VECTOR_STORE=pgvector .venv/bin/python -m scripts.ingest
 ```
 
+## Follow-on
+
+- Chunking strategy bake-off (Step 7): see [`chunking.md`](chunking.md).
+  Production default remains `recursive_character` until a larger corpus or
+  live embedding run differentiates the variants.
+
 ## Out of scope
 
-- Chunking strategy bake-off (Step 7)
 - Retrieval-grounded answers / citation validation (Step 8)
 - Bounded concurrent ingestion jobs (Step 9)

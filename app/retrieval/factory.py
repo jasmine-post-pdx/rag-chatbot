@@ -7,7 +7,7 @@ from pathlib import Path
 
 from app.config.settings import Settings
 from app.llm.embeddings import EmbeddingClient, FakeEmbeddingClient
-from app.retrieval.ingestion import IngestionPipeline
+from app.retrieval.ingestion import IngestionPipeline, build_chunking_config
 from app.retrieval.memory_vector import InMemoryVectorDocumentStore
 from app.retrieval.vector_store import VectorDocumentStore
 
@@ -89,6 +89,11 @@ def seed_corpus_if_present(
         embedder,
         chunk_size=settings.chunk_size,
         chunk_overlap=settings.chunk_overlap,
+        chunking_config=build_chunking_config(
+            strategy=settings.chunking_strategy,
+            chunk_size=settings.chunk_size,
+            chunk_overlap=settings.chunk_overlap,
+        ),
     )
     result = pipeline.ingest_directory(raw_dir)
     logger.info(
