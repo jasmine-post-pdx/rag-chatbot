@@ -34,10 +34,11 @@ executions (`TOOL_MAX_CALLS`). Invalid calls and handler failures become safe
 error observations so the model can continue or abstain; runaway loops fail
 closed as `StructuredOutputError` with category `unsupported`.
 
-The OpenAI question path enables tools when a `DocumentStore` is injected
-(lifespan seeds the in-memory corpus). The local placeholder path stays
-tool-free. The public HTTP contract is unchanged; citations remain empty until
-Step 8. `RetrievalMetrics` may reflect tool activity.
+The tool loop remains available when `LLMQuestionProcessor` is constructed with
+a `DocumentStore` directly. The factory default for OpenAI + store is now
+Step 8 `GroundedQuestionProcessor` (retrieve → budget → citation-validated
+answer) rather than the tool loop. The local placeholder path stays tool-free.
+`RetrievalMetrics` may still reflect tool activity on the explicit tool path.
 
 ## Alternatives considered
 
@@ -52,5 +53,6 @@ Step 8. `RetrievalMetrics` may reflect tool activity.
 - Unit tests cover the store, executor, LLM tool-turn mapping, and full fake
   model → tool → observation → answer loop without live credentials.
 - Step 6 can swap `InMemoryDocumentStore` without rewriting tools or the loop.
-- Step 8 still must validate citation IDs against evidence actually supplied to
-  the model; allow-listed lookup alone does not prove groundedness.
+- Step 8 validates citation IDs against chunks selected for the prompt (see
+  [`grounded-answers.md`](grounded-answers.md)); allow-listed tool lookup alone
+  does not prove groundedness.

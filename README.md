@@ -2,9 +2,10 @@
 
 > Status: This is an active learning project. The HTTP API, request/response
 > schemas, SQLite-backed question-job storage, optional OpenAI generation,
-> deterministic token/context budgeting, document tools, and Step 6 embeddings
-> retrieval (`POST /v1/search`, ingestion, in-memory or pgvector stores) are
-> implemented. Retrieval-grounded answers are still ahead.
+> deterministic token/context budgeting, document tools, embeddings retrieval
+> (`POST /v1/search`, ingestion, in-memory or pgvector stores), chunking
+> experiments, and Step 8 retrieval-grounded answers with citation validation
+> are implemented. Bounded concurrent ingestion (Step 9) is still ahead.
 
 ## Why this exists
 
@@ -28,9 +29,12 @@ client
     -> question routes -> await `QuestionWorkflow` (`app/services/question_workflow.py`)
       -> await to_thread(`QuestionJobStore`) for an idempotency lookup, when a key is present
       -> await `QuestionProcessor` (`app/services/question_processor.py`)
-        -> `allocate_context_budget` (`app/services/token_budget.py`) before generate
+        -> OpenAI + store: GroundedQuestionProcessor
+             retrieve → budget → structured AnswerV1 → validate citations
+        -> otherwise: placeholder or structured generate without retrieval
       -> await to_thread(`QuestionJobStore`) to persist the terminal job
         -> `SQLiteQuestionJobStore` (`app/stores/sqlite.py`)
+    -> search routes -> await to_thread(`SearchService`) -> vector `DocumentStore`
     -> readiness -> await to_thread(`QuestionJobStore.is_ready()`)
 ```
 
@@ -43,7 +47,7 @@ client
 | `app/schemas/` | Public request/response models for the HTTP contract. |
 | `app/domain/` | Internal question/job DTOs, context-budget models, and domain errors. |
 | `app/config/` | Environment-based settings and logging configuration. |
-| `app/services/` | Question workflow, answer processors, search, and token/context budgeting. |
+| `app/services/` | Question workflow, answer processors, citations, search, and token/context budgeting. |
 | `app/stores/` | `QuestionJobStore` protocol and SQLite implementation. |
 | `app/llm/` | Generation adapters plus `EmbeddingClient` (fake default, optional local). |
 | `app/retrieval/` | Chunking, ingestion, vector `DocumentStore` (memory/pgvector), Step 5 substring stand-in. |
@@ -55,11 +59,13 @@ client
 
 API handlers stay thin: they validate input, call services, and map results to
 public schemas. Generation supports `local` (placeholder) and `openai`
-adapters. The OpenAI path can call allow-listed read-only document tools against
-the same vector store that backs `POST /v1/search`. Processing failures are
-stored as failed jobs with `error_category: "processing_error"`; submission
-still returns a generic HTTP 500. More detail lives in
+adapters. With OpenAI and a document store, questions use
+`GroundedQuestionProcessor` against the same vector store as `POST /v1/search`.
+The Step 5 tool loop remains available via direct construction. Processing
+failures are stored as failed jobs with `error_category: "processing_error"`;
+submission still returns a generic HTTP 500. More detail lives in
 [`docs/architecture.md`](docs/architecture.md),
+[`docs/decisions/grounded-answers.md`](docs/decisions/grounded-answers.md),
 [`docs/decisions/embeddings-retrieval.md`](docs/decisions/embeddings-retrieval.md),
 and [`docs/decisions/tools.md`](docs/decisions/tools.md).
 
@@ -157,19 +163,21 @@ capacity is skipped so later smaller chunks can still be included. If fixed
 input alone exceeds the window, the processor raises a controlled error and
 does not call the provider. Budget metadata is logged without question,
 history, tool, or chunk text; set `GENERATION_BUDGET_DEBUG=true` for extra
-numeric fields. Retrieval is not wired yet, so live requests budget an empty
-chunk list and still send the bare question as generation input.
-`GENERATION_INSTRUCTIONS`, when set, is sent separately from the question and
-counted as fixed input. Leave it unset to send no extra instructions.
+numeric fields. On the grounded OpenAI path, ranked retrieval hits are passed
+into the budget allocator so only fitting chunks appear in the evidence prompt
+and become citeable. `GENERATION_INSTRUCTIONS`, when set, is sent separately
+from the question and counted as fixed input. Leave it unset to send no extra
+instructions.
 
 Structured outputs use internal schema version `"1"`
 (`ClassificationV1` / `AnswerV1` in `app/domain/model_outputs.py`). The public
-HTTP contract still returns a plain `answer` string and empty `citations`;
-claims and `insufficient_evidence` stay internal until retrieval grounding.
-Extra fields and unknown enums are rejected. When evidence is claimed
+HTTP contract returns `answer` plus `citations` populated from selected
+evidence after ID validation. Claims and `insufficient_evidence` stay
+internal. Extra fields and unknown enums are rejected. When evidence is claimed
 insufficient, claims must be empty; otherwise each claim needs at least one
-citation chunk ID. Classification is ready for later steps but is not called on
-live questions yet. See `docs/decisions/typed-outputs.md`.
+citation chunk ID that appears in the selected set. Optional classification can
+supply framework/language filters for grounded retrieval. See
+`docs/decisions/typed-outputs.md` and `docs/decisions/grounded-answers.md`.
 
 Structured recovery: provider refusals and local validation failures fail
 closed as processing errors without inventing fields. An incomplete structured
@@ -448,10 +456,11 @@ the SQLite store until the retrieval layer is wired up.
 
 ## Limitations And Troubleshooting
 
-- Answers are placeholders by default. With `GENERATION_PROVIDER=openai`, answers
-  come from the model (optionally after document tools); citations stay empty
-  until Step 8 grounding. Context budgeting still selects an empty ranked-chunk
-  list on the non-tool path so oversized fixed input fails before a provider call.
+- Answers are placeholders by default (`GENERATION_PROVIDER=local`). With
+  `GENERATION_PROVIDER=openai` and a seeded vector store, answers are
+  retrieval-grounded and may include citations for selected chunks. Invented or
+  budget-discarded citation IDs fail closed. Oversized fixed input still fails
+  before a provider call.
 - `POST /v1/search` is retrieval-only. Ingest sample markdown with
   `python -m scripts.ingest` (or rely on lifespan seeding of `data/raw`).
   Compare chunking strategies on an isolated in-memory index with
@@ -508,11 +517,11 @@ ruff check app tests
 
 The integration tests exercise the HTTP API through a dependency override
 backed by an in-memory SQLite store. Unit tests cover configuration, logging,
-job storage, the placeholder and LLM processors, token/context budgeting,
-document tools and the bounded tool loop, the async generation adapters, and
-event-loop isolation when SQLite or generation is blocked or cancelled.
-`tests/evals/` holds representative retrieval queries; answer-quality evals are
-still ahead.
+job storage, processors (including grounded answers and citation validation),
+token/context budgeting, document tools and the bounded tool loop, the async
+generation adapters, and event-loop isolation when SQLite or generation is
+blocked or cancelled. `tests/evals/` holds representative retrieval queries;
+broader answer-quality evals are still ahead.
 
 ## What's next
 
@@ -528,10 +537,11 @@ projects.
       Postgres/pgvector (Step 6).
 - [x] Add retrieval-only `POST /v1/search` and representative retrieval queries
       under `tests/evals/` (Step 6).
-- [ ] Compare chunking strategies and record the decision (Step 7).
-- [ ] Add a generation adapter that builds prompts from retrieved context.
-- [ ] Replace the placeholder processor with retrieval-grounded generation
+- [x] Compare chunking strategies and record the decision (Step 7).
+- [x] Add a generation adapter that builds prompts from retrieved context
       (Step 8).
+- [x] Replace empty citations with retrieval-grounded generation and selected-
+      chunk citation validation (Step 8).
 - [x] Move database path and model settings into configuration or environment
       variables.
 - [x] Await generation asynchronously and offload blocking SQLite work from the
@@ -540,6 +550,7 @@ projects.
       (Step 3).
 - [x] Add allow-listed read-only document tools and a bounded tool loop
       (Step 5).
+- [ ] Add bounded concurrent ingestion for genuine async I/O (Step 9).
 - [ ] Make question jobs durable across disconnects or restarts with a real
       pending/completed worker lifecycle when latency requires it.
 
