@@ -59,7 +59,10 @@ class Settings(BaseSettings):
     :ivar tool_call_timeout_seconds: Per-call deadline for document tools.
     :ivar tool_max_result_chars: Maximum characters returned in a tool observation.
     :ivar tool_max_turns: Maximum model↔tool iterations per question.
-    :ivar tool_max_calls: Maximum total tool executions per question."""
+    :ivar tool_max_calls: Maximum total tool executions per question.
+    :ivar ingestion_concurrency: Max concurrent external ingest calls (1–10).
+    :ivar ingestion_timeout_seconds: Overall deadline for a bounded ingest job.
+    :ivar ingestion_source_timeout_seconds: Per-source deadline for embed/upsert."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -114,6 +117,11 @@ class Settings(BaseSettings):
     tool_max_result_chars: int = Field(default=4000, ge=1)
     tool_max_turns: int = Field(default=3, ge=1)
     tool_max_calls: int = Field(default=6, ge=1)
+
+    # Bounded concurrent ingestion (Step 9)
+    ingestion_concurrency: int = Field(default=5, ge=1, le=10)
+    ingestion_timeout_seconds: float = Field(default=120.0, gt=0)
+    ingestion_source_timeout_seconds: float = Field(default=30.0, gt=0)
 
     @field_validator("vector_store")
     @classmethod

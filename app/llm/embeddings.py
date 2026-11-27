@@ -117,3 +117,25 @@ class FakeEmbeddingClient:
         if not text.strip():
             raise ValueError("Cannot embed empty or blank query")
         return _hash_embed(text, self._dimensions)
+
+    async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
+        """Async document embedding (Step 9 stub).
+
+        :param texts: Non-empty list of document strings.
+        :returns: One embedding per input text.
+        :raises NotImplementedError: Until the async path is implemented."""
+        raise NotImplementedError("FakeEmbeddingClient.aembed_documents is not implemented")
+
+    async def aembed_query(self, text: str) -> list[float]:
+        """Async query embedding (Step 9 stub).
+
+        :param text: Non-blank query string.
+        :returns: Query embedding.
+        :raises NotImplementedError: Until the async path is implemented."""
+        raise NotImplementedError("FakeEmbeddingClient.aembed_query is not implemented")
+
+    async def aclose(self) -> None:
+        """Release async resources (Step 9 stub).
+
+        :raises NotImplementedError: Until the async path is implemented."""
+        raise NotImplementedError("FakeEmbeddingClient.aclose is not implemented")

@@ -102,3 +102,17 @@ def seed_corpus_if_present(
         result.chunks_upserted,
         raw_dir,
     )
+
+
+async def async_seed_corpus_if_present(
+    settings: Settings,
+    store: VectorDocumentStore,
+    embedder: EmbeddingClient,
+) -> None:
+    """Seed the corpus via bounded async ingestion (Step 9 stub).
+
+    :param settings: Application settings.
+    :param store: Destination vector store.
+    :param embedder: Embedding client for document vectors.
+    :raises NotImplementedError: Until the bounded async seed path is implemented."""
+    raise NotImplementedError("async_seed_corpus_if_present is not implemented")

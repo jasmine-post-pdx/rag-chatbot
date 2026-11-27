@@ -70,6 +70,9 @@ def test_generation_client_settings_use_current_client_defaults(monkeypatch):
         "SEARCH_MAX_TOP_K",
         "EMBEDDING_DIMENSIONS",
         "CORPUS_RAW_DIR",
+        "INGESTION_CONCURRENCY",
+        "INGESTION_TIMEOUT_SECONDS",
+        "INGESTION_SOURCE_TIMEOUT_SECONDS",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -98,6 +101,9 @@ def test_generation_client_settings_use_current_client_defaults(monkeypatch):
     assert settings.corpus_raw_dir == "data/raw"
     assert settings.embedding_provider == "fake"
     assert settings.embedding_model == "fake-embed"
+    assert settings.ingestion_concurrency == 5
+    assert settings.ingestion_timeout_seconds == 120.0
+    assert settings.ingestion_source_timeout_seconds == 30.0
 
 
 def test_generation_client_settings_load_from_environment(monkeypatch):
@@ -116,6 +122,9 @@ def test_generation_client_settings_load_from_environment(monkeypatch):
     monkeypatch.setenv("TOOL_MAX_RESULT_CHARS", "1000")
     monkeypatch.setenv("TOOL_MAX_TURNS", "2")
     monkeypatch.setenv("TOOL_MAX_CALLS", "4")
+    monkeypatch.setenv("INGESTION_CONCURRENCY", "8")
+    monkeypatch.setenv("INGESTION_TIMEOUT_SECONDS", "90.5")
+    monkeypatch.setenv("INGESTION_SOURCE_TIMEOUT_SECONDS", "15.25")
 
     settings = Settings(_env_file=None)
 
@@ -131,6 +140,9 @@ def test_generation_client_settings_load_from_environment(monkeypatch):
     assert settings.tool_max_result_chars == 1000
     assert settings.tool_max_turns == 2
     assert settings.tool_max_calls == 4
+    assert settings.ingestion_concurrency == 8
+    assert settings.ingestion_timeout_seconds == 90.5
+    assert settings.ingestion_source_timeout_seconds == 15.25
 
 
 @pytest.mark.parametrize(
@@ -153,6 +165,10 @@ def test_generation_client_settings_load_from_environment(monkeypatch):
         ("SEARCH_DEFAULT_TOP_K", "0", "greater than or equal to 1"),
         ("SEARCH_MAX_TOP_K", "0", "greater than or equal to 1"),
         ("EMBEDDING_DIMENSIONS", "0", "greater than 0"),
+        ("INGESTION_CONCURRENCY", "0", "greater than or equal to 1"),
+        ("INGESTION_CONCURRENCY", "11", "less than or equal to 10"),
+        ("INGESTION_TIMEOUT_SECONDS", "0", "greater than 0"),
+        ("INGESTION_SOURCE_TIMEOUT_SECONDS", "0", "greater than 0"),
     ],
 )
 def test_generation_client_settings_reject_invalid_values(

@@ -31,6 +31,28 @@ class IngestResult(BaseModel):
     sources_deleted_before_upsert: int = 0
 
 
+class IngestSourceFailure(BaseModel):
+    """Safe per-source failure recorded during bounded concurrent ingestion.
+
+    :ivar source_id: Identifier of the source that failed.
+    :ivar category: Stable failure category (e.g. ``timeout``, ``embed``, ``upsert``)."""
+
+    source_id: str
+    category: str
+
+
+class ConcurrentIngestResult(IngestResult):
+    """Summary of a bounded concurrent ingestion run.
+
+    :ivar sources_succeeded: Sources that completed without error.
+    :ivar sources_failed: Sources that failed (timeout, embed, upsert, etc.).
+    :ivar failures: Safe per-source failure records."""
+
+    sources_succeeded: int = 0
+    sources_failed: int = 0
+    failures: list[IngestSourceFailure] = []
+
+
 def _parse_front_matter(raw: str) -> tuple[dict[str, str], str]:
     """Parse optional YAML-like ``key: value`` front matter.
 
@@ -226,3 +248,70 @@ class IngestionPipeline:
         :param source_id: Source identifier to remove.
         :returns: Number of chunks removed."""
         return self._store.delete_source(source_id)
+
+
+class BoundedIngestionPipeline:
+    """Async ingestion with a concurrency cap on external embed/upsert calls.
+
+    Step 9 stub: the public surface exists so TDD tests can collect and fail red
+    before the real bounded concurrent implementation is written.
+
+    :ivar concurrency: Max concurrent external calls (1–10).
+    :ivar timeout_seconds: Optional overall job deadline.
+    :ivar source_timeout_seconds: Optional per-source deadline."""
+
+    def __init__(
+        self,
+        store: VectorDocumentStore,
+        embedder: EmbeddingClient,
+        *,
+        concurrency: int = 5,
+        timeout_seconds: float | None = None,
+        source_timeout_seconds: float | None = None,
+        chunk_size: int = 500,
+        chunk_overlap: int = 50,
+        chunking_config: ChunkingConfig | None = None,
+    ) -> None:
+        """Configure the bounded pipeline (stub).
+
+        :param store: Destination vector store.
+        :param embedder: Embedding client (sync or async-capable).
+        :param concurrency: Max concurrent external calls; must be 1–10.
+        :param timeout_seconds: Optional overall job deadline in seconds.
+        :param source_timeout_seconds: Optional per-source deadline in seconds.
+        :param chunk_size: Character window size when ``chunking_config`` is unset.
+        :param chunk_overlap: Character overlap when ``chunking_config`` is unset.
+        :param chunking_config: Optional strategy-aware chunking configuration.
+        :raises ValueError: If ``concurrency`` is outside 1–10."""
+        if concurrency < 1 or concurrency > 10:
+            raise ValueError("concurrency must be between 1 and 10")
+        self._store = store
+        self._embedder = embedder
+        self.concurrency = concurrency
+        self.timeout_seconds = timeout_seconds
+        self.source_timeout_seconds = source_timeout_seconds
+        self._chunk_size = chunk_size
+        self._chunk_overlap = chunk_overlap
+        self._chunking_config = chunking_config
+
+    async def ingest_documents(
+        self, sources: list[SourceDocument]
+    ) -> ConcurrentIngestResult:
+        """Ingest sources with a bounded concurrency cap (Step 9 stub).
+
+        :param sources: Sources to chunk, embed, and upsert.
+        :returns: Concurrent ingestion summary.
+        :raises NotImplementedError: Until the bounded path is implemented."""
+        raise NotImplementedError(
+            "BoundedIngestionPipeline.ingest_documents is not implemented"
+        )
+
+    async def ingest_directory(self, path: Path) -> ConcurrentIngestResult:
+        """Ingest ``.md`` files under ``path`` with a concurrency cap (Step 9 stub).
+
+        :param path: Directory containing markdown sources.
+        :returns: Concurrent ingestion summary.
+        :raises NotImplementedError: Until the bounded path is implemented."""
+        raise NotImplementedError(
+            "BoundedIngestionPipeline.ingest_directory is not implemented"
+        )
