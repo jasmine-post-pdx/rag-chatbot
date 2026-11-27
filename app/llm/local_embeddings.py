@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 
 class LocalEmbeddingClient:
     """Embed texts with a local sentence-transformers model.
@@ -60,3 +62,23 @@ class LocalEmbeddingClient:
             raise ValueError("Cannot embed empty or blank query")
         vector = self._model.encode([text], normalize_embeddings=True)[0]
         return vector.tolist()
+
+    async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
+        """Async document embedding; offloads CPU encode off the event loop.
+
+        :param texts: Non-empty list of document strings.
+        :returns: One embedding per input text.
+        :raises ValueError: If ``texts`` is empty or any item is blank."""
+        return await asyncio.to_thread(self.embed_documents, texts)
+
+    async def aembed_query(self, text: str) -> list[float]:
+        """Async query embedding; offloads CPU encode off the event loop.
+
+        :param text: Non-blank query string.
+        :returns: Query embedding.
+        :raises ValueError: If ``text`` is blank."""
+        return await asyncio.to_thread(self.embed_query, text)
+
+    async def aclose(self) -> None:
+        """No-op close for the local model (idempotent)."""
+        return None
