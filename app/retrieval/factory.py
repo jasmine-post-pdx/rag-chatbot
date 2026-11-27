@@ -7,7 +7,11 @@ from pathlib import Path
 
 from app.config.settings import Settings
 from app.llm.embeddings import EmbeddingClient, FakeEmbeddingClient
-from app.retrieval.ingestion import IngestionPipeline, build_chunking_config
+from app.retrieval.ingestion import (
+    BoundedIngestionPipeline,
+    IngestionPipeline,
+    build_chunking_config,
+)
 from app.retrieval.memory_vector import InMemoryVectorDocumentStore
 from app.retrieval.vector_store import VectorDocumentStore
 
@@ -109,10 +113,39 @@ async def async_seed_corpus_if_present(
     store: VectorDocumentStore,
     embedder: EmbeddingClient,
 ) -> None:
-    """Seed the corpus via bounded async ingestion (Step 9 stub).
+    """Seed the corpus via bounded concurrent ingestion when sources exist.
 
     :param settings: Application settings.
     :param store: Destination vector store.
-    :param embedder: Embedding client for document vectors.
-    :raises NotImplementedError: Until the bounded async seed path is implemented."""
-    raise NotImplementedError("async_seed_corpus_if_present is not implemented")
+    :param embedder: Embedding client for document vectors."""
+    raw_dir = Path(settings.corpus_raw_dir)
+    if not raw_dir.is_dir():
+        logger.info("Corpus directory missing; skipping seed path=%s", raw_dir)
+        return
+    markdown_files = list(raw_dir.glob("*.md"))
+    if not markdown_files:
+        logger.info("Corpus directory has no markdown; skipping seed path=%s", raw_dir)
+        return
+    pipeline = BoundedIngestionPipeline(
+        store,
+        embedder,
+        concurrency=settings.ingestion_concurrency,
+        timeout_seconds=settings.ingestion_timeout_seconds,
+        source_timeout_seconds=settings.ingestion_source_timeout_seconds,
+        chunk_size=settings.chunk_size,
+        chunk_overlap=settings.chunk_overlap,
+        chunking_config=build_chunking_config(
+            strategy=settings.chunking_strategy,
+            chunk_size=settings.chunk_size,
+            chunk_overlap=settings.chunk_overlap,
+        ),
+    )
+    result = await pipeline.ingest_directory(raw_dir)
+    logger.info(
+        "Seeded vector store sources=%s succeeded=%s failed=%s chunks=%s path=%s",
+        result.sources_processed,
+        result.sources_succeeded,
+        result.sources_failed,
+        result.chunks_upserted,
+        raw_dir,
+    )
