@@ -74,4 +74,4 @@ VECTOR_STORE=pgvector .venv/bin/python -m scripts.ingest
 
 ## Out of scope
 
-- Bounded concurrent ingestion jobs (Step 9)
+- Bounded concurrent ingestion jobs (Step 9) — see `bounded-ingestion.md`

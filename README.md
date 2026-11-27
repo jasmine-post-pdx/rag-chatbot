@@ -4,8 +4,8 @@
 > schemas, SQLite-backed question-job storage, optional OpenAI generation,
 > deterministic token/context budgeting, document tools, embeddings retrieval
 > (`POST /v1/search`, ingestion, in-memory or pgvector stores), chunking
-> experiments, and Step 8 retrieval-grounded answers with citation validation
-> are implemented. Bounded concurrent ingestion (Step 9) is still ahead.
+> experiments, Step 8 retrieval-grounded answers with citation validation, and
+> Step 9 bounded concurrent ingestion are implemented.
 
 ## Why this exists
 
@@ -463,7 +463,14 @@ the SQLite store until the retrieval layer is wired up.
   before a provider call.
 - `POST /v1/search` is retrieval-only. Ingest sample markdown with
   `python -m scripts.ingest` (or rely on lifespan seeding of `data/raw`).
-  Compare chunking strategies on an isolated in-memory index with
+  Both paths use `BoundedIngestionPipeline` with
+  `INGESTION_CONCURRENCY` (default `5`, max `10`),
+  `INGESTION_TIMEOUT_SECONDS` (default `120`), and
+  `INGESTION_SOURCE_TIMEOUT_SECONDS` (default `30`). The CLI runs in a
+  separate process from the API, so long ingest jobs do not share the API
+  event loop or compete with question latency. Lifespan seed is awaited and
+  offloads blocking parse/chunk/store work. Compare chunking strategies on an
+  isolated in-memory index with
   `python -m scripts.chunking_experiment --path data/raw --output docs/evals/chunking-experiment-results.json`
   (never clears the live `documents` collection).
 - `POST /v1/questions` still finishes in one request: it awaits generation,
@@ -476,7 +483,8 @@ the SQLite store until the retrieval layer is wired up.
   limits. Uvicorn worker count, OS resources, and provider rate limits still
   govern how much work runs at once. Per-attempt `GENERATION_TIMEOUT_SECONDS`
   plus retries and backoff can make total request latency longer than one
-  timeout.
+  timeout. Ingestion concurrency is capped separately via
+  `INGESTION_CONCURRENCY`.
 - The SQLite database path defaults to `data/questions.db` and can be changed
   with the `QUESTIONS_DB_PATH` environment variable or in a `.env` file.
 - Postgres is optional and is not required to run the current API. Start it with
@@ -550,7 +558,7 @@ projects.
       (Step 3).
 - [x] Add allow-listed read-only document tools and a bounded tool loop
       (Step 5).
-- [ ] Add bounded concurrent ingestion for genuine async I/O (Step 9).
+- [x] Add bounded concurrent ingestion for genuine async I/O (Step 9).
 - [ ] Make question jobs durable across disconnects or restarts with a real
       pending/completed worker lifecycle when latency requires it.
 

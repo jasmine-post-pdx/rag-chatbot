@@ -69,18 +69,20 @@ it is not required on every live request.
 
 | Path | Current contents |
 | --- | --- |
-| `tests/unit/` | Configuration, logging, SQLite jobs, processors, citations, grounded answers (incl. security/performance), typed outputs, budgeting, embeddings, chunking, ingestion, vector store, tools, tool loop, async generation, event-loop isolation. |
+| `tests/unit/` | Configuration, logging, SQLite jobs, processors, citations, grounded answers (incl. security/performance), typed outputs, budgeting, embeddings, chunking, ingestion (incl. bounded concurrent), vector store, tools, tool loop, async generation, event-loop isolation. |
 | `tests/integration/` | HTTP API (including search and grounded questions), OpenAPI contracts, lifespan, request logging, generation wiring, opt-in OpenAI smoke and pgvector tests. |
 | `tests/evals/` | Representative retrieval queries with automated source-id checks against the fake embedder; chunking experiment checks. |
 
 ## Future RAG plan
 
 ```text
-documents -> ingestion/chunking -> vector store   (done in Step 6–7)
+documents -> bounded ingest/chunking -> vector store   (done in Step 6–7, 9)
 client -> API -> retrieve -> budget -> grounded generate -> answer   (done in Step 8)
 ```
 
-- Add bounded concurrent ingestion if batch jobs need it (Step 9).
+- CLI ingest (`python -m scripts.ingest`) is a separate process from the API, so
+  long jobs stay isolated from question latency. Lifespan seeding uses the same
+  bounded async pipeline with `INGESTION_CONCURRENCY` (1–10).
 
 ## Decisions
 

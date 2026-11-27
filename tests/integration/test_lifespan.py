@@ -187,10 +187,7 @@ def test_lifespan_seeds_via_async_bounded_helper(monkeypatch, tmp_path):
     monkeypatch.setattr(main.settings, "questions_db_path", str(tmp_path / "q.db"))
     monkeypatch.setattr(main.settings, "corpus_raw_dir", str(raw))
     monkeypatch.setattr(main.settings, "generation_provider", "local")
-    monkeypatch.setattr(
-        main, "async_seed_corpus_if_present", recording_async_seed, raising=False
-    )
-    monkeypatch.setattr(main, "seed_corpus_if_present", recording_sync_seed)
+    monkeypatch.setattr(main, "async_seed_corpus_if_present", recording_async_seed)
     monkeypatch.setattr(
         retrieval_factory, "async_seed_corpus_if_present", recording_async_seed
     )

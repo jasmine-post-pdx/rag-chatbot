@@ -9,6 +9,31 @@ next steps as they stood at the time, not necessarily the current state.
 
 ---
 
+## 2026-11-27 — Bounded async ingestion
+
+**What I figured out**
+Step 9 adds `BoundedIngestionPipeline`: semaphore-capped concurrent
+`aembed_documents` calls (1–10), `to_thread` for parse/chunk/sync store I/O,
+per-source and job deadlines, cancel-safe cleanup, and partial-failure
+reporting via `ConcurrentIngestResult`. The CLI and lifespan seed share that
+path; embedding clients gained `aembed_*` / `aclose`. No durable ingest queue.
+
+**Why it matters**
+Batch ingest can use real concurrency against provider limits without freezing
+the API event loop, and CLI ingest stays in a separate process from questions.
+
+**Still fuzzy**
+- When a durable ingest worker would beat process-isolated CLI for demos
+- Whether pgvector should grow a native async driver instead of `to_thread`
+
+**Next**
+Phase One wrap-up (architecture/docs already largely present); durable question
+workers only if latency demands them.
+
+See also `docs/decisions/bounded-ingestion.md`.
+
+---
+
 ## 2026-11-26 — Retrieval-grounded answers
 
 **What I figured out**

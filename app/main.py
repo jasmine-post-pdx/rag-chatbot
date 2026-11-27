@@ -15,9 +15,9 @@ from app.config.logging import (
 from app.config.settings import settings
 from app.middleware import REQUEST_ID_HEADER, RequestLogMiddleware
 from app.retrieval.factory import (
+    async_seed_corpus_if_present,
     build_embedding_client,
     build_vector_store,
-    seed_corpus_if_present,
 )
 from app.routers import health, questions, search
 from app.schemas.errors import ServerErrorResponse, ValidationErrorResponse
@@ -37,9 +37,9 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI) -> None:
     """Manage application startup and shutdown state.
 
-    Owns the SQLite job store, vector search stack, and when configured a shared
-    async OpenAI SDK client. Resources are closed on shutdown or failed startup
-    after creation.
+    Owns the SQLite job store, vector search stack, bounded corpus seed, and when
+    configured a shared async OpenAI SDK client. Embedding and generation
+    clients are closed on shutdown or failed startup after creation.
 
     :param app: The FastAPI application instance.
     :yields: Control is returned to the application while it runs."""
@@ -61,14 +61,6 @@ async def lifespan(app: FastAPI) -> None:
 
     embedding_client = build_embedding_client(settings)
     vector_store = build_vector_store(settings, embedding_client)
-    seed_corpus_if_present(settings, vector_store, embedding_client)
-    search_service = SearchService(
-        vector_store,
-        embedding_model=embedding_client.model,
-        similarity_metric=settings.similarity_metric,
-        default_top_k=settings.search_default_top_k,
-        max_top_k=settings.search_max_top_k,
-    )
 
     # OpenAI + store → GroundedQuestionProcessor (Step 8). Same vector store as search.
     document_store = None
@@ -77,6 +69,14 @@ async def lifespan(app: FastAPI) -> None:
 
     store = None
     try:
+        await async_seed_corpus_if_present(settings, vector_store, embedding_client)
+        search_service = SearchService(
+            vector_store,
+            embedding_model=embedding_client.model,
+            similarity_metric=settings.similarity_metric,
+            default_top_k=settings.search_default_top_k,
+            max_top_k=settings.search_max_top_k,
+        )
         processor = build_question_processor(
             settings.generation_provider,
             settings.generation_model,
@@ -113,6 +113,9 @@ async def lifespan(app: FastAPI) -> None:
             store.close()
         if generation_client is not None:
             await generation_client.close()
+        aclose = getattr(embedding_client, "aclose", None)
+        if aclose is not None:
+            await aclose()
         app.state.question_job_store = None
         app.state.generation_client = None
         app.state.embedding_client = None
