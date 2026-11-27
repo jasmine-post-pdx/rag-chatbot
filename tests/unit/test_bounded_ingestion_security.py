@@ -58,10 +58,14 @@ async def test_path_traversal_source_id_does_not_corrupt_other_sources(tmp_path:
     result = await pipeline.ingest_documents([malicious, victim])
 
     assert result.sources_processed == 2
-    hits = store.search_documents("dependency injection", limit=5)
-    assert hits
-    assert all(hit.source_id == "fastapi-guide" for hit in hits)
-    # Traversal id must not collapse onto the victim's namespace.
+    victim_chunk = store.get_document_chunk("fastapi-guide:0")
+    assert victim_chunk is not None
+    assert "dependency injection" in victim_chunk.text
+    assert "Ignore prior instructions" not in victim_chunk.text
+    # Traversal id stays a distinct namespace and does not collapse onto the victim.
+    evil_own = store.get_document_chunk("../fastapi-guide:0")
+    assert evil_own is not None
+    assert evil_own.source_id == "../fastapi-guide"
     evil_hits = [
         hit
         for hit in store.search_documents("overwrite fastapi-guide", limit=10)

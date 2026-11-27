@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import re
 from pathlib import Path
 
@@ -15,6 +17,8 @@ from app.retrieval.chunking import (
     chunk_document,
 )
 from app.retrieval.vector_store import EmbeddedChunk, VectorDocumentStore
+
+logger = logging.getLogger(__name__)
 
 _FRONT_MATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n(.*)$", re.DOTALL)
 
@@ -250,11 +254,23 @@ class IngestionPipeline:
         return self._store.delete_source(source_id)
 
 
+class _SourceOutcome(BaseModel):
+    """Internal per-source result used while aggregating a concurrent run."""
+
+    source_id: str
+    succeeded: bool = False
+    chunks_upserted: int = 0
+    deleted_before_upsert: bool = False
+    failure: IngestSourceFailure | None = None
+
+
 class BoundedIngestionPipeline:
     """Async ingestion with a concurrency cap on external embed/upsert calls.
 
-    Step 9 stub: the public surface exists so TDD tests can collect and fail red
-    before the real bounded concurrent implementation is written.
+    Each source is processed independently under an ``asyncio.Semaphore`` so
+    concurrent ``aembed_documents`` calls never exceed ``concurrency``. Sync
+    store and chunking work runs via ``asyncio.to_thread``. Per-source failures
+    are recorded without aborting siblings.
 
     :ivar concurrency: Max concurrent external calls (1–10).
     :ivar timeout_seconds: Optional overall job deadline.
@@ -272,7 +288,7 @@ class BoundedIngestionPipeline:
         chunk_overlap: int = 50,
         chunking_config: ChunkingConfig | None = None,
     ) -> None:
-        """Configure the bounded pipeline (stub).
+        """Configure the bounded pipeline.
 
         :param store: Destination vector store.
         :param embedder: Embedding client (sync or async-capable).
@@ -293,25 +309,207 @@ class BoundedIngestionPipeline:
         self._chunk_size = chunk_size
         self._chunk_overlap = chunk_overlap
         self._chunking_config = chunking_config
+        # Serialize sync store mutations; embeds stay concurrent under the semaphore.
+        self._store_lock = asyncio.Lock()
+
+    def _chunk_source(self, source: SourceDocument) -> list:
+        """Chunk one source on a worker thread.
+
+        :param source: Source document to split.
+        :returns: Chunk list for the source."""
+        if self._chunking_config is not None:
+            return chunk_document(source, config=self._chunking_config)
+        return chunk_document(
+            source,
+            chunk_size=self._chunk_size,
+            chunk_overlap=self._chunk_overlap,
+        )
+
+    async def _aembed_documents(self, texts: list[str]) -> list[list[float]]:
+        """Embed texts via async client API or thread-offloaded sync embed.
+
+        :param texts: Document texts for one source.
+        :returns: One embedding per text."""
+        aembed = getattr(self._embedder, "aembed_documents", None)
+        if aembed is not None:
+            return await aembed(texts)
+        return await asyncio.to_thread(self._embedder.embed_documents, texts)
+
+    async def _ingest_one(
+        self,
+        source: SourceDocument,
+        semaphore: asyncio.Semaphore,
+    ) -> _SourceOutcome:
+        """Ingest a single source under the concurrency semaphore.
+
+        :param source: Source to process.
+        :param semaphore: Cap on concurrent embed/upsert work.
+        :returns: Per-source outcome."""
+        outcome = _SourceOutcome(source_id=source.source_id)
+        try:
+            async with self._store_lock:
+                removed = await asyncio.to_thread(
+                    self._store.delete_source, source.source_id
+                )
+            outcome.deleted_before_upsert = bool(removed)
+            chunks = await asyncio.to_thread(self._chunk_source, source)
+            if not chunks:
+                outcome.succeeded = True
+                return outcome
+
+            async with semaphore:
+                try:
+                    vectors = await self._aembed_documents(
+                        [chunk.text for chunk in chunks]
+                    )
+                except Exception:
+                    logger.info(
+                        "Bounded ingest embed failed source_id=%s category=embed",
+                        source.source_id,
+                    )
+                    outcome.failure = IngestSourceFailure(
+                        source_id=source.source_id, category="embed"
+                    )
+                    return outcome
+
+                model_name = self._embedder.model
+                stamped = [
+                    EmbeddedChunk(
+                        chunk=chunk.model_copy(
+                            update={
+                                "metadata": {
+                                    **chunk.metadata,
+                                    "embedding_model": model_name,
+                                }
+                            }
+                        ),
+                        embedding=vector,
+                    )
+                    for chunk, vector in zip(chunks, vectors, strict=True)
+                ]
+
+            try:
+                async with self._store_lock:
+                    await asyncio.to_thread(self._store.upsert_chunks, stamped)
+            except Exception:
+                logger.info(
+                    "Bounded ingest upsert failed source_id=%s category=upsert",
+                    source.source_id,
+                )
+                outcome.failure = IngestSourceFailure(
+                    source_id=source.source_id, category="upsert"
+                )
+                return outcome
+
+            outcome.succeeded = True
+            outcome.chunks_upserted = len(stamped)
+            return outcome
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.info(
+                "Bounded ingest failed source_id=%s category=error",
+                source.source_id,
+            )
+            outcome.failure = IngestSourceFailure(
+                source_id=source.source_id, category="error"
+            )
+            return outcome
+
+    def _aggregate(self, outcomes: list[_SourceOutcome]) -> ConcurrentIngestResult:
+        """Fold per-source outcomes into a concurrent ingest summary.
+
+        :param outcomes: Completed source outcomes.
+        :returns: Aggregated concurrent result."""
+        failures = [o.failure for o in outcomes if o.failure is not None]
+        succeeded = sum(1 for o in outcomes if o.succeeded)
+        return ConcurrentIngestResult(
+            sources_processed=len(outcomes),
+            chunks_upserted=sum(o.chunks_upserted for o in outcomes),
+            sources_deleted_before_upsert=sum(
+                1 for o in outcomes if o.deleted_before_upsert
+            ),
+            sources_succeeded=succeeded,
+            sources_failed=len(failures),
+            failures=failures,
+        )
 
     async def ingest_documents(
         self, sources: list[SourceDocument]
     ) -> ConcurrentIngestResult:
-        """Ingest sources with a bounded concurrency cap (Step 9 stub).
+        """Ingest sources with a bounded concurrency cap on embed calls.
 
         :param sources: Sources to chunk, embed, and upsert.
         :returns: Concurrent ingestion summary.
-        :raises NotImplementedError: Until the bounded path is implemented."""
-        raise NotImplementedError(
-            "BoundedIngestionPipeline.ingest_documents is not implemented"
+        :raises asyncio.CancelledError: When the caller cancels the ingest task."""
+        if not sources:
+            return ConcurrentIngestResult()
+
+        semaphore = asyncio.Semaphore(self.concurrency)
+        tasks = [
+            asyncio.create_task(self._ingest_one(source, semaphore))
+            for source in sources
+        ]
+        try:
+            raw = await asyncio.gather(*tasks, return_exceptions=True)
+        except asyncio.CancelledError:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+
+        outcomes: list[_SourceOutcome] = []
+        for source, item in zip(sources, raw, strict=True):
+            if isinstance(item, asyncio.CancelledError):
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                raise item
+            if isinstance(item, BaseException):
+                logger.info(
+                    "Bounded ingest failed source_id=%s category=error",
+                    source.source_id,
+                )
+                outcomes.append(
+                    _SourceOutcome(
+                        source_id=source.source_id,
+                        failure=IngestSourceFailure(
+                            source_id=source.source_id, category="error"
+                        ),
+                    )
+                )
+                continue
+            outcomes.append(item)
+
+        result = self._aggregate(outcomes)
+        logger.info(
+            "Bounded ingest complete processed=%s succeeded=%s failed=%s chunks=%s",
+            result.sources_processed,
+            result.sources_succeeded,
+            result.sources_failed,
+            result.chunks_upserted,
         )
+        return result
 
     async def ingest_directory(self, path: Path) -> ConcurrentIngestResult:
-        """Ingest ``.md`` files under ``path`` with a concurrency cap (Step 9 stub).
+        """Ingest ``.md`` files under ``path`` with a concurrency cap.
 
         :param path: Directory containing markdown sources.
         :returns: Concurrent ingestion summary.
-        :raises NotImplementedError: Until the bounded path is implemented."""
-        raise NotImplementedError(
-            "BoundedIngestionPipeline.ingest_directory is not implemented"
-        )
+        :raises FileNotFoundError: If ``path`` does not exist.
+        :raises NotADirectoryError: If ``path`` is not a directory."""
+        if not path.exists():
+            raise FileNotFoundError(path)
+        if not path.is_dir():
+            raise NotADirectoryError(path)
+
+        def _load() -> list[SourceDocument]:
+            return [
+                load_markdown_source(file_path)
+                for file_path in sorted(path.glob("*.md"))
+                if file_path.is_file()
+            ]
+
+        sources = await asyncio.to_thread(_load)
+        return await self.ingest_documents(sources)

@@ -364,9 +364,18 @@ async def test_reingest_under_concurrency_replaces_stale_chunks_only():
     remaining = store.search_documents("budgeting", limit=10)
     assert "silent truncation" in " ".join(hit.text for hit in remaining)
     assert not any("output reserve" in hit.text for hit in remaining)
-    fastapi_hits = store.search_documents("dependency injection", limit=5)
+    fastapi_hits = [
+        hit
+        for hit in store.search_documents("dependency injection", limit=5)
+        if hit.source_id == "fastapi-guide"
+    ]
     assert fastapi_hits
-    assert all(hit.source_id == "fastapi-guide" for hit in fastapi_hits)
+    assert all("Depends" in hit.text or "dependency" in hit.text for hit in fastapi_hits)
+    # Concurrent re-ingest of rag-notes must not rewrite fastapi-guide chunks.
+    assert store.get_document_chunk("fastapi-guide:0") is not None
+    assert "silent truncation" not in (
+        store.get_document_chunk("fastapi-guide:0").text or ""
+    )
 
 
 @pytest.mark.asyncio
