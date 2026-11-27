@@ -358,10 +358,26 @@ class BoundedIngestionPipeline:
                 return outcome
 
             async with semaphore:
+                texts = [chunk.text for chunk in chunks]
                 try:
-                    vectors = await self._aembed_documents(
-                        [chunk.text for chunk in chunks]
+                    if self.source_timeout_seconds is not None:
+                        vectors = await asyncio.wait_for(
+                            self._aembed_documents(texts),
+                            timeout=self.source_timeout_seconds,
+                        )
+                    else:
+                        vectors = await self._aembed_documents(texts)
+                except TimeoutError:
+                    logger.info(
+                        "Bounded ingest timed out source_id=%s category=timeout",
+                        source.source_id,
                     )
+                    outcome.failure = IngestSourceFailure(
+                        source_id=source.source_id, category="timeout"
+                    )
+                    return outcome
+                except asyncio.CancelledError:
+                    raise
                 except Exception:
                     logger.info(
                         "Bounded ingest embed failed source_id=%s category=embed",
@@ -391,6 +407,8 @@ class BoundedIngestionPipeline:
             try:
                 async with self._store_lock:
                     await asyncio.to_thread(self._store.upsert_chunks, stamped)
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 logger.info(
                     "Bounded ingest upsert failed source_id=%s category=upsert",
@@ -434,6 +452,61 @@ class BoundedIngestionPipeline:
             failures=failures,
         )
 
+    def _outcomes_from_gather(
+        self,
+        sources: list[SourceDocument],
+        raw: list[object],
+        *,
+        cancelled_as_timeout: bool,
+    ) -> list[_SourceOutcome]:
+        """Map gather results to per-source outcomes.
+
+        :param sources: Sources in task order.
+        :param raw: Gather return values / exceptions.
+        :param cancelled_as_timeout: When true, cancelled tasks become timeouts.
+        :returns: Outcome list aligned with ``sources``."""
+        outcomes: list[_SourceOutcome] = []
+        for source, item in zip(sources, raw, strict=True):
+            if isinstance(item, _SourceOutcome):
+                outcomes.append(item)
+                continue
+            if isinstance(item, (asyncio.CancelledError, TimeoutError)):
+                category = "timeout" if cancelled_as_timeout else "error"
+                if isinstance(item, TimeoutError):
+                    category = "timeout"
+                outcomes.append(
+                    _SourceOutcome(
+                        source_id=source.source_id,
+                        failure=IngestSourceFailure(
+                            source_id=source.source_id, category=category
+                        ),
+                    )
+                )
+                continue
+            if isinstance(item, BaseException):
+                logger.info(
+                    "Bounded ingest failed source_id=%s category=error",
+                    source.source_id,
+                )
+                outcomes.append(
+                    _SourceOutcome(
+                        source_id=source.source_id,
+                        failure=IngestSourceFailure(
+                            source_id=source.source_id, category="error"
+                        ),
+                    )
+                )
+                continue
+            outcomes.append(
+                _SourceOutcome(
+                    source_id=source.source_id,
+                    failure=IngestSourceFailure(
+                        source_id=source.source_id, category="error"
+                    ),
+                )
+            )
+        return outcomes
+
     async def ingest_documents(
         self, sources: list[SourceDocument]
     ) -> ConcurrentIngestResult:
@@ -450,39 +523,39 @@ class BoundedIngestionPipeline:
             asyncio.create_task(self._ingest_one(source, semaphore))
             for source in sources
         ]
-        try:
+
+        async def _collect(*, cancelled_as_timeout: bool) -> ConcurrentIngestResult:
             raw = await asyncio.gather(*tasks, return_exceptions=True)
+            outcomes = self._outcomes_from_gather(
+                sources, raw, cancelled_as_timeout=cancelled_as_timeout
+            )
+            return self._aggregate(outcomes)
+
+        try:
+            if self.timeout_seconds is not None:
+                try:
+                    result = await asyncio.wait_for(
+                        _collect(cancelled_as_timeout=False),
+                        timeout=self.timeout_seconds,
+                    )
+                except TimeoutError:
+                    for task in tasks:
+                        task.cancel()
+                    result = await _collect(cancelled_as_timeout=True)
+                    logger.info(
+                        "Bounded ingest job timed out processed=%s failed=%s",
+                        result.sources_processed,
+                        result.sources_failed,
+                    )
+                    return result
+            else:
+                result = await _collect(cancelled_as_timeout=False)
         except asyncio.CancelledError:
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             raise
 
-        outcomes: list[_SourceOutcome] = []
-        for source, item in zip(sources, raw, strict=True):
-            if isinstance(item, asyncio.CancelledError):
-                for task in tasks:
-                    if not task.done():
-                        task.cancel()
-                await asyncio.gather(*tasks, return_exceptions=True)
-                raise item
-            if isinstance(item, BaseException):
-                logger.info(
-                    "Bounded ingest failed source_id=%s category=error",
-                    source.source_id,
-                )
-                outcomes.append(
-                    _SourceOutcome(
-                        source_id=source.source_id,
-                        failure=IngestSourceFailure(
-                            source_id=source.source_id, category="error"
-                        ),
-                    )
-                )
-                continue
-            outcomes.append(item)
-
-        result = self._aggregate(outcomes)
         logger.info(
             "Bounded ingest complete processed=%s succeeded=%s failed=%s chunks=%s",
             result.sources_processed,
